@@ -1,0 +1,27 @@
+{
+  "name": "bilibili-collector",
+  "version": "1.0.0",
+  "description": "本地 B 站视频收藏管理器",
+  "main": "./out/main/index.js",
+  "author": "茶呆呆",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-vite build && electron-builder --win"
+  },
+  "dependencies": {
+    "@esbuild/win32-x64": "^0.28.2",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11"
+  }
+}

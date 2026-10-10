@@ -1,0 +1,17 @@
+{
+  "appId": "com.chadaidai.bilibili-collector",
+  "productName": "B站收藏管理",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "out/**/*"
+  ],
+  "win": {
+    "target": "nsis"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}
