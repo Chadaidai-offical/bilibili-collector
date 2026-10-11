@@ -15,7 +15,9 @@ contextBridge.exposeInMainWorld('api', {
   batchDeleteVideos: (ids, source) => ipcRenderer.invoke('batch-delete-videos', ids, source),
 
   // 标签管理（分区级重命名 / 合并 / 删除）与统计面板
-  listTagStats: (source) => ipcRenderer.invoke('list-tag-stats', source),
+  // listTagStats(source, merge)：merge 默认 true，返回相似标签合并后的分组
+  listTagStats: (source, merge) => ipcRenderer.invoke('list-tag-stats', source, merge),
+  mergeSimilarTags: (source) => ipcRenderer.invoke('merge-similar-tags', source),
   editTags: (fromTags, toTag, source) => ipcRenderer.invoke('edit-tags', fromTags, toTag, source),
   getStats: (source) => ipcRenderer.invoke('get-stats', source),
   checkInvalidVideos: (source) => ipcRenderer.invoke('check-invalid', source),

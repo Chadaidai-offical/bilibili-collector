@@ -346,6 +346,133 @@ function cleanTags(list) {
   return out
 }
 
+// ===== 标签归一化与相似整合 =====
+// B 站标签是「用户各写各的」，同一个概念能变出十几种写法，抓完标签后主界面会被铺满。
+// 这里只做两类保守判定，避免误合并：
+//   ① 归一化后同键 —— 大小写 / 全角半角 / 空格 / 连接符 / emoji 差异（python、PYTHON、ｐｙｔｈｏｎ）
+//   ② 前缀包含 —— 短的写法是长的写法的前缀（「机器学习」⊂「机器学习入门」）
+// 通用词（教程 / 合集 / 官方 …）单独存在时不参与包含归并，免得把「教程」吸进「Python教程」。
+const TAG_GENERIC = new Set([
+  '教程', '教学', '视频', '合集', '系列', '入门', '基础', '进阶', '分享', '推荐', '搬运', '转载',
+  '原创', '自制', '日常', '生活', '游戏', '音乐', '动画', '影视', '科技', '数码', '知识', '资讯',
+  '搞笑', '综艺', '纪录片', '舞蹈', '鬼畜', '时尚', '美食', '动物', '体育', '汽车', '财经', '旅游',
+  '学习', '经验', '中文', '字幕', '高清', '完整版', '更新', '记录', '实况', '解说', '干货', 'pv',
+  'mad', 'amv', 'vlog', '合集向', '教程向', '歌曲', '演唱会', '直播', '游戏实况'
+])
+// 前缀包含时允许的最大长度差（差得太多说明不是同一个概念）
+const TAG_PREFIX_MAX_DIFF = 6
+
+// 代表写法的偏好顺序：混合大小写（Python）> 全小写（python）> 全大写（PYTHON）。
+// 组内写法次数一样时按这个挑，免得「同一个标签」最后留下一个别扭的全大写写法。
+// 纯中文标签三者同分，会继续用「更短优先」来裁决。
+function tagDisplayRank(name) {
+  const s = String(name || '')
+  if (!/[A-Z]/.test(s)) return 1
+  return s === s.toUpperCase() ? 2 : 0
+}
+
+// 归一化：全角转半角 → 小写 → 只留字母 / 数字 / 汉字（丢掉空格、标点、连接符、emoji）
+function normalizeTagKey(name) {
+  return String(name == null ? '' : name)
+    .replace(/[\uff01-\uff5e]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+// 把 [{name, count}] 归并成若干「近似标签组」：
+//   [{ name(代表写法), count(合计), variantCount, variants:[{name,count}] }]
+// 代表写法 = 组内出现次数最多的那个（一样多时取更短的），保证主界面显示的是最高频写法。
+function mergeSimilarTags(items) {
+  const list = (Array.isArray(items) ? items : [])
+    .map((it) => ({
+      name: String((it && it.name) || '').trim(),
+      count: Number(it && it.count) || 0
+    }))
+    .filter((it) => it.name)
+  if (list.length === 0) return []
+
+  const keys = list.map((it) => normalizeTagKey(it.name))
+  const parent = list.map((_, i) => i)
+
+  function find(i) {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]]
+      i = parent[i]
+    }
+    return i
+  }
+  function union(a, b) {
+    const ra = find(a)
+    const rb = find(b)
+    if (ra !== rb) parent[rb] = ra
+  }
+
+  // ① 同键合并
+  const byKey = new Map()
+  for (let i = 0; i < list.length; i++) {
+    const anchor = byKey.get(keys[i])
+    if (anchor === undefined) byKey.set(keys[i], i)
+    else union(anchor, i)
+  }
+
+  // ② 前缀包含合并：按归一化长度降序处理，每个标签找「最长的、能当它前缀的其它标签」并到一起。
+  //    用首字分桶 + 长度降序，避免两两全扫（标签上千个时这一步是性能关键）。
+  const byFirstChar = new Map()
+  for (let i = 0; i < list.length; i++) {
+    const c = keys[i][0] || ''
+    if (!byFirstChar.has(c)) byFirstChar.set(c, [])
+    byFirstChar.get(c).push(i)
+  }
+  const order = list.map((_, i) => i).sort((a, b) => keys[b].length - keys[a].length)
+  for (const i of order) {
+    const key = keys[i]
+    if (key.length < 3) continue // 太短的（含单字）不做包含归并，误伤风险高
+    if (TAG_GENERIC.has(list[i].name.toLowerCase())) continue
+    const bucket = byFirstChar.get(key[0] || '') || []
+    let best = -1
+    for (const j of bucket) {
+      if (j === i) continue
+      const k = keys[j]
+      if (k.length >= key.length) continue
+      if (key.length - k.length > TAG_PREFIX_MAX_DIFF) continue
+      if (!key.startsWith(k)) continue
+      if (TAG_GENERIC.has(list[j].name.toLowerCase())) continue
+      if (best === -1 || keys[best].length < k.length) best = j
+    }
+    if (best !== -1) union(best, i)
+  }
+
+  // ③ 汇总成组（组内同名写法再兜底去重一次）
+  const groupsMap = new Map()
+  for (let i = 0; i < list.length; i++) {
+    const root = find(i)
+    if (!groupsMap.has(root)) groupsMap.set(root, [])
+    groupsMap.get(root).push(list[i])
+  }
+
+  const groups = []
+  for (const members of groupsMap.values()) {
+    const byName = new Map()
+    for (const m of members) byName.set(m.name, (byName.get(m.name) || 0) + m.count)
+    const variants = [...byName.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort(
+        (a, b) =>
+          b.count - a.count ||
+          tagDisplayRank(a.name) - tagDisplayRank(b.name) ||
+          a.name.length - b.name.length ||
+          a.name.localeCompare(b.name, 'zh-Hans-CN')
+      )
+    groups.push({
+      name: variants[0].name,
+      count: variants.reduce((s, v) => s + v.count, 0),
+      variantCount: variants.length,
+      variants
+    })
+  }
+  return groups.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+}
+
 // 抓单个视频在 B 站的原始标签。走公开只读接口 /x/tag/archive/tags（匿名也能访问），
 // 比 view/detail 轻得多。失败一律当作「没有标签」—— 标签只是附加信息，
 // 不能因为它失败就中断整批导入。
@@ -917,8 +1044,11 @@ async function checkUpdate(manual = false) {
 }
 
 // ===== 标签管理 =====
-// 聚合某分区的全部标签及使用次数（按次数倒序，同次数按名称排）
-function listTagStats(source = 'fav') {
+// 聚合某分区的全部标签及使用次数（按次数倒序）。
+// merge 默认开启：把相似写法合并成一组，避免主界面出现几百个近似标签。
+// 每项形如 { name(代表写法), count(合计), variantCount, variants:[{name,count}] }。
+// 传 merge=false 则退化成「一个写法一项」（variants 只有它自己），兼容老调用方。
+function listTagStats(source = 'fav', merge = true) {
   const t = tableFor(source)
   const rows = db.prepare(`SELECT tags FROM ${t}`).all()
   const map = new Map()
@@ -927,9 +1057,54 @@ function listTagStats(source = 'fav') {
       map.set(tag, (map.get(tag) || 0) + 1)
     }
   }
-  return [...map.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+  const flat = [...map.entries()].map(([name, count]) => ({ name, count }))
+  if (merge === false) {
+    return flat
+      .map((it) => ({ ...it, variantCount: 1, variants: [it] }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+  }
+  return mergeSimilarTags(flat)
+}
+
+// 一键整合（落库）：把每个「近似标签组」里的次要写法统一改写成组内代表写法。
+// 整合后主界面 / 标签管理看到的标签会明显变少，而且是真改数据、不是只改显示。
+// 单事务一次扫描，返回影响面（组数 / 被改写的写法数 / 受影响记录数）。
+function mergeSimilarTagsInDb(source = 'fav') {
+  const t = tableFor(source)
+  const groups = listTagStats(source, true).filter((g) => g.variantCount > 1)
+  if (groups.length === 0) return { ok: true, groups: 0, tags: 0, updated: 0 }
+
+  const remap = new Map()
+  let tags = 0
+  for (const g of groups) {
+    for (const v of g.variants) {
+      if (v.name === g.name) continue
+      remap.set(v.name, g.name)
+      tags++
+    }
+  }
+  if (remap.size === 0) return { ok: true, groups: 0, tags: 0, updated: 0 }
+
+  const rows = db.prepare(`SELECT id, tags FROM ${t}`).all()
+  const updateStmt = db.prepare(`UPDATE ${t} SET tags = ? WHERE id = ?`)
+  let updated = 0
+  const run = db.transaction(() => {
+    for (const row of rows) {
+      const current = safeParseTags(row.tags)
+      const next = []
+      for (const tag of current) {
+        const mapped = remap.get(tag) || tag
+        if (!next.includes(mapped)) next.push(mapped)
+      }
+      const same = next.length === current.length && next.every((x, i) => x === current[i])
+      if (!same) {
+        updateStmt.run(JSON.stringify(next), row.id)
+        updated++
+      }
+    }
+  })
+  run()
+  return { ok: true, groups: groups.length, tags, updated }
 }
 
 // 标签批量重命名 / 合并 / 删除（作用于整个分区）：
@@ -1008,15 +1183,18 @@ function getStats(source = 'fav', topN = 12) {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
       .slice(0, topN)
 
+  // 标签先做相似整合再排行：否则「Python」「python」「Python教程」会各自占一行，Top 榜没参考价值
+  const tagGroups = mergeSimilarTags([...tagMap.entries()].map(([name, count]) => ({ name, count })))
+
   return {
     total: rows.length,
     totalDuration,
     watched,
     unwatched: rows.length - watched,
     invalid,
-    tagCount: tagMap.size,
+    tagCount: tagGroups.length,
     authorCount: authorMap.size,
-    topTags: topFrom(tagMap),
+    topTags: tagGroups.slice(0, topN).map((g) => ({ name: g.name, count: g.count })),
     topAuthors: topFrom(authorMap)
   }
 }
@@ -2017,7 +2195,8 @@ ipcMain.handle('batch-add-tags', safe((ids, tags, source) => batchAddTags(ids, t
 ipcMain.handle('batch-delete-videos', safe((ids, source) => batchDeleteVideos(ids, source)))
 
 // 标签管理 + 统计面板
-ipcMain.handle('list-tag-stats', safe((source) => listTagStats(source)))
+ipcMain.handle('list-tag-stats', safe((source, merge) => listTagStats(source, merge !== false)))
+ipcMain.handle('merge-similar-tags', safe((source) => mergeSimilarTagsInDb(source)))
 ipcMain.handle('edit-tags', safe((fromTags, toTag, source) => editTags(fromTags, toTag, source)))
 ipcMain.handle('get-stats', safe((source) => getStats(source)))
 
@@ -2187,5 +2366,9 @@ module.exports = {
   importSearchItems,
   extractWbiKey,
   pickStream,
-  safeFileName
+  safeFileName,
+  normalizeTagKey,
+  mergeSimilarTags,
+  listTagStats,
+  mergeSimilarTagsInDb
 }

@@ -138,6 +138,15 @@ function App() {
   const [renameTo, setRenameTo] = useState('')
   const [tagBusy, setTagBusy] = useState(false)
 
+  // 标签筛选面板：默认收起。抓完 B 站标签后标签动辄几百个，铺开在主页面上会占满整屏
+  const [tagCloud, setTagCloud] = useState([]) // 主进程合并好的「近似标签组」
+  const [showTagFilter, setShowTagFilter] = useState(false)
+  const [tagFilterKeyword, setTagFilterKeyword] = useState('')
+  const [tagFilterLimit, setTagFilterLimit] = useState(40)
+
+  // 行内标签折叠：默认每条只显示前 3 个，点过展开的才铺开全部
+  const [tagExpanded, setTagExpanded] = useState(() => new Set())
+
   // 登录状态 + 收藏夹导入
   const [loginInfo, setLoginInfo] = useState(null)
   const [showFolderPicker, setShowFolderPicker] = useState(false)
@@ -161,10 +170,15 @@ function App() {
       const listPromise = key.trim()
         ? window.api.searchVideos(key.trim(), src)
         : window.api.listVideos(src)
-      const [res, st] = await Promise.all([listPromise, window.api.getStats(src)])
+      const [res, st, tc] = await Promise.all([
+        listPromise,
+        window.api.getStats(src),
+        window.api.listTagStats(src)
+      ])
       if (Array.isArray(res)) setVideos(res)
       else if (res && res.error) setError(res.error)
       if (st && !st.error) setStats({ ...EMPTY_STATS, ...st })
+      if (Array.isArray(tc)) setTagCloud(tc)
     } catch (err) {
       setError(err.message || '读取失败')
     }
@@ -571,12 +585,23 @@ function App() {
     }
   }
 
-  // 从当前列表聚合出所有不重复的标签（用于筛选栏）
-  const allTags = useMemo(() => {
-    const set = new Set()
-    videos.forEach((v) => v.tags.forEach((t) => set.add(t)))
-    return [...set].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
-  }, [videos])
+  // 标签筛选面板的数据源：主进程已经把「相似写法」合并成一组（按使用次数倒序），
+  // 前端只需按关键词再过滤一层。这里不再直接罗列当前列表里的每个原始标签。
+  const visibleTagCloud = useMemo(() => {
+    const kw = tagFilterKeyword.trim().toLowerCase()
+    if (!kw) return tagCloud
+    return tagCloud.filter(
+      (g) =>
+        g.name.toLowerCase().includes(kw) ||
+        (g.variants || []).some((v) => v.name.toLowerCase().includes(kw))
+    )
+  }, [tagCloud, tagFilterKeyword])
+
+  // 当前正在筛选的那个标签组（用于在收起状态下也提示「已合并了几个近似写法」）
+  const activeTagGroup = useMemo(
+    () => tagCloud.find((g) => g.name === activeTag) || null,
+    [tagCloud, activeTag]
+  )
 
   // 当前列表里失效视频的数量（用于「只看失效」筛选角标）
   const invalidCount = useMemo(() => videos.filter((v) => v.invalid).length, [videos])
@@ -593,7 +618,10 @@ function App() {
   const filteredVideos = useMemo(() => {
     let list = videos
     if (activeTag) {
-      list = list.filter((v) => v.tags.includes(activeTag))
+      // 选中的是「合并后的代表写法」，命中时要匹配组内所有近似写法
+      const group = tagCloud.find((g) => g.name === activeTag)
+      const names = new Set(group && group.variants ? group.variants.map((v) => v.name) : [activeTag])
+      list = list.filter((v) => v.tags.some((t) => names.has(t)))
     }
     if (watchFilter === 'watched') {
       list = list.filter((v) => v.watched)
@@ -632,7 +660,17 @@ function App() {
         sorted.sort((a, b) => (b.favTime || 0) - (a.favTime || 0) || b.id - a.id)
     }
     return sorted
-  }, [videos, activeTag, watchFilter, invalidOnly, source, shareFrom, sortBy])
+  }, [videos, activeTag, watchFilter, invalidOnly, source, shareFrom, sortBy, tagCloud])
+
+  // 行内标签的展开 / 收起（只是显示层，不改数据）
+  function toggleTagExpand(id) {
+    setTagExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // ===== 标签管理 =====
   // 打开标签管理：拉取该分区全部标签及使用次数
@@ -648,10 +686,62 @@ function App() {
     }
   }
 
-  function toggleTagSelect(name) {
+  // 标签组里包含的所有「原始写法」名（合并前）
+  function groupNames(g) {
+    return g && g.variants && g.variants.length ? g.variants.map((v) => v.name) : [g.name]
+  }
+  const allTagNames = useMemo(() => tagStats.flatMap((g) => groupNames(g)), [tagStats])
+
+  // 勾选一个标签组 = 勾选组内全部写法（重命名 / 删除会一起作用到这些写法上）
+  function toggleTagSelect(group) {
+    const names = groupNames(group)
+    const allOn = names.every((n) => selectedTags.includes(n))
     setSelectedTags((prev) =>
-      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+      allOn ? prev.filter((n) => !names.includes(n)) : [...new Set([...prev, ...names])]
     )
+  }
+
+  // 一键整合相似标签（落库）：把每组里的次要写法统一改写成组内代表写法
+  async function handleMergeSimilar() {
+    const groups = tagStats.filter((g) => g.variantCount > 1)
+    if (groups.length === 0) {
+      flash('没有发现可以整合的相似标签～')
+      return
+    }
+    const sample = groups
+      .slice(0, 5)
+      .map((g) => `${g.variants.map((v) => v.name).join(' / ')}  →  ${g.name}`)
+    const more = groups.length > 5 ? `\n…等共 ${groups.length} 组` : ''
+    if (
+      !window.confirm(
+        `发现 ${groups.length} 组相似标签，确定整合吗？\n\n${sample.join('\n')}${more}\n\n（把组内次要写法统一改成代表写法，只动标签名，不影响视频）`
+      )
+    ) {
+      return
+    }
+    setTagBusy(true)
+    try {
+      const res = await window.api.mergeSimilarTags(source)
+      if (res && res.error) {
+        setError(res.error)
+      } else if (res && res.ok) {
+        flash(
+          res.updated > 0
+            ? `已整合 ${res.groups} 组相似标签（改写 ${res.tags} 个写法，影响 ${res.updated} 条记录）`
+            : '没有需要改动的记录～'
+        )
+      }
+      setSelectedTags([])
+      setRenameTo('')
+      setTagExpanded(new Set())
+      const list = await window.api.listTagStats(source)
+      setTagStats(Array.isArray(list) ? list : [])
+      refresh(keyword, source)
+    } catch (err) {
+      setError(err.message || '整合相似标签失败')
+    } finally {
+      setTagBusy(false)
+    }
   }
 
   // 重命名 / 合并选中标签
@@ -1444,17 +1534,85 @@ function App() {
             </div>
           )}
 
-          {allTags.length > 0 && (
-            <div className="tag-filters">
-              {allTags.map((t) => (
+          {/* 标签筛选：默认收起。抓完 B 站标签后标签数量动辄上百，
+              全部铺在主页面上会占满整屏，所以这里只给一个折叠入口，
+              展开后按使用次数倒序、先渲染前 40 个，支持搜索与「显示更多」。 */}
+          {tagCloud.length > 0 && (
+            <div className="tag-filter-panel">
+              <div className="tag-filter-head">
                 <button
-                  key={t}
-                  className={`tag-chip ${activeTag === t ? 'on' : ''}`}
-                  onClick={() => setActiveTag(activeTag === t ? null : t)}
+                  className={`tag-filter-toggle ${showTagFilter ? 'on' : ''}`}
+                  onClick={() => setShowTagFilter((v) => !v)}
                 >
-                  {t}
+                  <span className="tag-filter-arrow">{showTagFilter ? '▾' : '▸'}</span>
+                  🏷 标签筛选
+                  <span className="tag-filter-count">共 {tagCloud.length} 个</span>
                 </button>
-              ))}
+                {activeTag && (
+                  <span className="tag-filter-active">
+                    正在筛选：<b>{activeTag}</b>
+                    {activeTagGroup && activeTagGroup.variantCount > 1 && (
+                      <span className="tag-filter-merged">
+                        （含 {activeTagGroup.variantCount - 1} 个近似写法）
+                      </span>
+                    )}
+                    <button
+                      className="tag-filter-clear"
+                      onClick={() => setActiveTag(null)}
+                      title="取消标签筛选"
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
+              </div>
+
+              {showTagFilter && (
+                <div className="tag-filter-body">
+                  <input
+                    className="batch-input tag-filter-search"
+                    placeholder="搜索标签…（近似写法也能搜到）"
+                    value={tagFilterKeyword}
+                    onChange={(e) => setTagFilterKeyword(e.target.value)}
+                  />
+                  {visibleTagCloud.length === 0 ? (
+                    <div className="tag-filter-empty">没有匹配的标签</div>
+                  ) : (
+                    <>
+                      <div className="tag-filters">
+                        {visibleTagCloud.slice(0, tagFilterLimit).map((g) => (
+                          <button
+                            key={g.name}
+                            className={`tag-chip ${activeTag === g.name ? 'on' : ''}`}
+                            title={
+                              g.variantCount > 1
+                                ? `已合并 ${g.variantCount} 个近似写法：${g.variants
+                                    .map((v) => v.name)
+                                    .join('、')}`
+                                : g.name
+                            }
+                            onClick={() => setActiveTag(activeTag === g.name ? null : g.name)}
+                          >
+                            {g.name}
+                            <span className="tag-chip-num">{g.count}</span>
+                            {g.variantCount > 1 && (
+                              <span className="tag-chip-merge">⊞{g.variantCount}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      {visibleTagCloud.length > tagFilterLimit && (
+                        <button
+                          className="tag-filter-more"
+                          onClick={() => setTagFilterLimit((n) => n + 60)}
+                        >
+                          显示更多（还有 {visibleTagCloud.length - tagFilterLimit} 个）
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1590,11 +1748,23 @@ function App() {
                         placeholder="输入标签，用逗号分隔"
                       />
                     ) : v.tags.length > 0 ? (
-                      v.tags.map((t) => (
-                        <span key={t} className="tag">
-                          {t}
-                        </span>
-                      ))
+                      <>
+                        {/* 一条视频最多 20 个标签，全铺开会把列表撑得很长，所以默认只留前 3 个 */}
+                        {(tagExpanded.has(v.id) ? v.tags : v.tags.slice(0, 3)).map((t) => (
+                          <span key={t} className="tag">
+                            {t}
+                          </span>
+                        ))}
+                        {v.tags.length > 3 && (
+                          <button
+                            className="tag-more"
+                            title={v.tags.join('、')}
+                            onClick={() => toggleTagExpand(v.id)}
+                          >
+                            {tagExpanded.has(v.id) ? '收起' : `+${v.tags.length - 3}`}
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <span className="no-tag">暂无标签</span>
                     )}
@@ -1640,36 +1810,62 @@ function App() {
             ) : (
               <>
                 <div className="tag-mgr-toolbar">
-                  <span className="batch-hint">已选 {selectedTags.length} 个标签</span>
-                  <button
-                    className="btn-ghost"
-                    onClick={() =>
-                      setSelectedTags(
-                        selectedTags.length === tagStats.length ? [] : tagStats.map((t) => t.name)
-                      )
-                    }
-                  >
-                    {selectedTags.length === tagStats.length ? '取消全选' : '全选'}
-                  </button>
+                  <span className="batch-hint">
+                    已选 {selectedTags.length} 个标签
+                    {selectedTags.length > 0 && (
+                      <span className="tag-mgr-sub">（跨 {tagStats.filter((g) => groupNames(g).some((n) => selectedTags.includes(n))).length} 组）</span>
+                    )}
+                  </span>
+                  <div className="tag-mgr-tools">
+                    <button
+                      className="btn-ghost"
+                      onClick={handleMergeSimilar}
+                      disabled={tagBusy || !tagStats.some((g) => g.variantCount > 1)}
+                      title="把「大小写 / 全半角 / 前后缀近似」的写法统一成同一个标签"
+                    >
+                      🔗 一键整合相似标签
+                      {tagStats.some((g) => g.variantCount > 1) && (
+                        <span className="tag-mgr-count">
+                          {tagStats.filter((g) => g.variantCount > 1).length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      className="btn-ghost"
+                      onClick={() =>
+                        setSelectedTags(
+                          selectedTags.length === allTagNames.length ? [] : [...allTagNames]
+                        )
+                      }
+                    >
+                      {selectedTags.length === allTagNames.length ? '取消全选' : '全选'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="tag-mgr-list">
-                  {tagStats.map((t) => (
-                    <label
-                      key={t.name}
-                      className={`tag-mgr-item ${selectedTags.includes(t.name) ? 'on' : ''}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedTags.includes(t.name)}
-                        onChange={() => toggleTagSelect(t.name)}
-                      />
-                      <span className="tag-mgr-name" title={t.name}>
-                        {t.name}
-                      </span>
-                      <span className="tag-mgr-count">{t.count}</span>
-                    </label>
-                  ))}
+                  {tagStats.map((g) => {
+                    const names = groupNames(g)
+                    const on = names.every((n) => selectedTags.includes(n))
+                    return (
+                      <label
+                        key={g.name}
+                        className={`tag-mgr-item ${on ? 'on' : ''}`}
+                        title={
+                          g.variantCount > 1
+                            ? `含 ${g.variantCount} 个近似写法：${names.join('、')}`
+                            : g.name
+                        }
+                      >
+                        <input type="checkbox" checked={on} onChange={() => toggleTagSelect(g)} />
+                        <span className="tag-mgr-name">{g.name}</span>
+                        {g.variantCount > 1 && (
+                          <span className="tag-mgr-merged">⊞{g.variantCount}</span>
+                        )}
+                        <span className="tag-mgr-count">{g.count}</span>
+                      </label>
+                    )
+                  })}
                 </div>
 
                 <div className="tag-mgr-rename">
@@ -1711,7 +1907,9 @@ function App() {
                   </button>
                 </div>
                 <p className="tag-mgr-tip">
-                  重命名 / 合并只改标签名，不影响视频；若目标标签已存在会自动去重合并。
+                  列表里带 <b>⊞N</b> 的是「相似标签组」，代表写法取组内最高频的那个；
+                  勾选一组等于勾选组内全部写法。重命名 / 合并 / 删除只改标签名，不影响视频。
+                  想一次收拾干净就点「🔗 一键整合相似标签」。
                 </p>
               </>
             )}

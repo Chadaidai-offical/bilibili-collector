@@ -373,6 +373,142 @@ body {
   background: #2a2030;
 }
 
+/* ===== 标签筛选面板（默认收起，避免标签铺满整屏） ===== */
+.tag-filter-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tag-filter-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tag-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 12px;
+  border: 1px solid #3a3a3a;
+  background: #242424;
+  color: #9aa4c8;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tag-filter-toggle:hover {
+  border-color: #fb7299;
+  color: #fb7299;
+}
+
+.tag-filter-toggle.on {
+  border-color: #fb7299;
+  color: #fb7299;
+  background: #2a2030;
+}
+
+.tag-filter-arrow {
+  font-size: 10px;
+}
+
+.tag-filter-count {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.tag-filter-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #2a2030;
+  border: 1px solid #fb7299;
+  color: #fb7299;
+  font-size: 12px;
+}
+
+.tag-filter-merged {
+  color: #8a7f9a;
+  font-size: 11px;
+}
+
+.tag-filter-clear {
+  border: none;
+  background: transparent;
+  color: #fb7299;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.tag-filter-clear:hover {
+  color: #fff;
+}
+
+.tag-filter-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #1e1e1e;
+  border: 1px solid #333;
+}
+
+.tag-filter-search {
+  width: 100%;
+  max-width: 340px;
+}
+
+.tag-filter-empty {
+  padding: 6px 2px;
+  color: #666;
+  font-size: 12px;
+}
+
+.tag-filter-more {
+  align-self: flex-start;
+  padding: 4px 12px;
+  border-radius: 12px;
+  border: 1px dashed #3a3a3a;
+  background: transparent;
+  color: #8a93b8;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tag-filter-more:hover {
+  border-color: #fb7299;
+  color: #fb7299;
+}
+
+.tag-chip-num {
+  margin-left: 6px;
+  font-size: 10px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.tag-chip.on .tag-chip-num {
+  color: #b07a90;
+}
+
+.tag-chip-merge {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #7f8aa8;
+}
+
+.tag-chip.on .tag-chip-merge {
+  color: #b07a90;
+}
+
 .empty {
   padding: 48px 0;
   text-align: center;
@@ -467,6 +603,22 @@ body {
 .no-tag {
   color: #555;
   font-size: 12px;
+}
+
+/* 行内标签的「+N / 收起」按钮 */
+.tag-more {
+  padding: 3px 9px;
+  border-radius: 12px;
+  border: 1px dashed #3a3a3a;
+  background: transparent;
+  color: #8a93b8;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tag-more:hover {
+  border-color: #fb7299;
+  color: #fb7299;
 }
 
 .tag-editor {
@@ -943,6 +1095,27 @@ body {
   color: #999;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/* 标签管理：合并组标记 + 工具区 */
+.tag-mgr-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-mgr-sub {
+  margin-left: 4px;
+  color: #6b7280;
+}
+
+.tag-mgr-merged {
+  font-size: 10px;
+  color: #7f8aa8;
+}
+
+.tag-mgr-item.on .tag-mgr-merged {
+  color: #b07a90;
 }
 
 .tag-mgr-rename {

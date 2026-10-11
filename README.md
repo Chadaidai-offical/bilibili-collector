@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.4.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.0/Bilibili-Collector-Setup-1.4.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.4.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.1/Bilibili-Collector-Setup-1.4.1.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -133,7 +133,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.4.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.0/Bilibili-Collector-Setup-1.4.0.exe) | 约 105 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.4.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.1/Bilibili-Collector-Setup-1.4.1.exe) | 约 105 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -344,6 +344,15 @@ bilibili-collector/
 ---
 
 ## 更新内容（CHANGELOG）
+
+### v1.4.1（2026-10-11）
+
+修复「导入 B 站标签后标签太多、把界面撑爆」的问题（bug 修复版，无新增功能）：
+
+- **标签筛选栏收纳**：主界面的标签筛选默认**收起**，展开后带搜索框、按使用次数排序，先显示 40 个 + 「显示更多」
+- **行内标签折叠**：每条视频默认只显示**前 3 个**标签，其余收进「+N」，需要时再展开
+- **相似标签归并显示**：同义写法（大小写、全角半角、前后缀包含等）自动合并成一组，如 `Python / python / PYTHON` 显示为一个标签；筛选时匹配组内全部写法
+- **可选的一键落库整合**：标签管理弹窗新增「🔗 一键整合相似标签」，把上述归并真正写回数据库（先展示示例再确认，**幂等**可重复执行）；默认只影响显示，不动你的数据
 
 ### v1.4.0（2026-10-11）
 
