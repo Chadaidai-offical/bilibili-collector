@@ -600,6 +600,12 @@ body {
   font-size: 12px;
 }
 
+/* 活动 / 话题标签：和普通分类标签区分开，一眼看出这是「某一期活动」 */
+.tag-topic {
+  background: #3a2a12;
+  color: #e0a458;
+}
+
 .no-tag {
   color: #555;
   font-size: 12px;
@@ -1132,6 +1138,135 @@ body {
   font-size: 12px;
   color: #777;
   line-height: 1.5;
+}
+
+/* ===== 标签来源分类 / 平台认证 / 同族（v1.5.0）===== */
+.tag-mgr-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -4px 0 4px;
+  font-size: 12px;
+  color: #8a8a8a;
+}
+
+.tag-mgr-summary .dot {
+  color: #4a4a4a;
+}
+
+.tag-mgr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tag-chip {
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid #3a3a3a;
+  background: #1f1f1f;
+  color: #9aa4c0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tag-chip:hover {
+  border-color: #6b7fd0;
+}
+
+.tag-chip.on {
+  border-color: #6b7fd0;
+  background: #22283c;
+  color: #aab8ff;
+}
+
+.tag-src {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.src-topic {
+  background: #3a2a12;
+  color: #e0a458;
+}
+
+.src-desc {
+  background: #1e2f2a;
+  color: #63c9a8;
+}
+
+.tag-verified {
+  font-size: 10px;
+  color: #6fbf73;
+}
+
+.tag-mgr-item.on .tag-verified {
+  color: #9de0a1;
+}
+
+.tip-topic {
+  color: #e0a458;
+}
+
+.tag-family-panel {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: #1b1f2a;
+  border: 1px solid #2f3a55;
+}
+
+.tag-family-title {
+  font-size: 11px;
+  color: #8892b0;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+.tag-family-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  border-top: 1px solid #232a3a;
+}
+
+.tag-family-name {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 8px;
+  border: 1px solid #3d4a6b;
+  background: #232b3f;
+  color: #a8b8ff;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tag-family-name:hover {
+  border-color: #fb7299;
+  color: #fb7299;
+}
+
+.tag-family-members {
+  color: #7c869c;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-family-more {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #6b7280;
 }
 
 /* ===== 新版本提示条 ===== */

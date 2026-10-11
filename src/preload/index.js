@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('api', {
   // listTagStats(source, merge)：merge 默认 true，返回相似标签合并后的分组
   listTagStats: (source, merge) => ipcRenderer.invoke('list-tag-stats', source, merge),
   mergeSimilarTags: (source) => ipcRenderer.invoke('merge-similar-tags', source),
+  // 标签总览：来源分类（UP 主频道 / 活动话题 / 简介话题）、平台分词认证标记、共前缀族
+  tagOverview: (source) => ipcRenderer.invoke('tag-overview', source),
+  listTagFamilies: (source) => ipcRenderer.invoke('list-tag-families', source),
   editTags: (fromTags, toTag, source) => ipcRenderer.invoke('edit-tags', fromTags, toTag, source),
   getStats: (source) => ipcRenderer.invoke('get-stats', source),
   checkInvalidVideos: (source) => ipcRenderer.invoke('check-invalid', source),

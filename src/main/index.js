@@ -123,8 +123,21 @@ async function fetchVideoInfo(url) {
     videoData = null
   }
 
+  // 再用 view/detail 补一次：拿权威的 tag_type 分类 + 平台分词 participle + 简介。
+  // 单条手动添加多一个请求完全能接受；失败会静默退回上面白捡的标签，不影响添加流程。
+  const detail = await fetchVideoDetail(bvid)
+
   const owner = (videoData && videoData.owner) || {}
-  const stat = (videoData && videoData.stat) || {}
+  const stat = (videoData && videoData.stat) || detail.stat || {}
+
+  // 标签 = 官方分类标签优先，没有才退回页面白捡的；再补上简介里的 #话题#
+  const tagList = detail.tags.length ? [...detail.tags] : cleanTags(pageTags)
+  const tagMeta = detail.tags.length ? { ...detail.tagMeta } : {}
+  const desc = (videoData && videoData.desc) || detail.desc || ''
+  for (const topic of topicsFromDesc(desc)) {
+    if (!tagList.includes(topic)) tagList.push(topic)
+    if (!tagMeta[topic]) tagMeta[topic] = 'desc'
+  }
 
   return {
     bvid,
@@ -138,12 +151,16 @@ async function fetchVideoInfo(url) {
     cid:
       (videoData &&
         (videoData.cid || (videoData.pages && videoData.pages[0] && videoData.pages[0].cid))) ||
+      detail.cid ||
       0,
-    desc: (videoData && videoData.desc) || '',
-    pubdate: (videoData && videoData.pubdate) || 0,
-    tname: (videoData && videoData.tname) || '',
-    // B 站原始标签，作为默认标签一起入库（从公开页白捡，零额外请求）
-    tags: cleanTags(pageTags),
+    desc,
+    pubdate: (videoData && videoData.pubdate) || detail.pubdate || 0,
+    tname: (videoData && videoData.tname) || detail.tname || '',
+    // B 站原始标签（带来源分类：UP 主频道 / 活动话题）作为默认标签一起入库
+    tags: cleanTags(tagList),
+    tagMeta,
+    // 平台算法算出的主题分词，入库后用于交叉验证标签可信度
+    participle: detail.participle,
     stat: {
       view: stat.view || 0,
       danmaku: stat.danmaku || 0,
@@ -186,6 +203,8 @@ function createTableSql(name) {
       tname       TEXT DEFAULT '',
       stat        TEXT DEFAULT '{}',
       tags        TEXT DEFAULT '[]',
+      tag_meta    TEXT DEFAULT '{}',
+      participle  TEXT DEFAULT '[]',
       watched     INTEGER DEFAULT 0,
       fav_time    INTEGER DEFAULT 0,
       invalid     INTEGER DEFAULT 0,
@@ -213,6 +232,8 @@ function createSharedTableSql() {
       tname       TEXT DEFAULT '',
       stat        TEXT DEFAULT '{}',
       tags        TEXT DEFAULT '[]',
+      tag_meta    TEXT DEFAULT '{}',
+      participle  TEXT DEFAULT '[]',
       watched     INTEGER DEFAULT 0,
       fav_time    INTEGER DEFAULT 0,
       invalid     INTEGER DEFAULT 0,
@@ -257,6 +278,10 @@ function migrateDb() {
     ['tname', "TEXT DEFAULT ''"],
     ['stat', "TEXT DEFAULT '{}'"],
     ['tags', "TEXT DEFAULT '[]'"],
+    // 标签来源：{ "阴阳师": "up"(UP主频道标签) | "topic"(活动/话题) | "desc"(简介#话题#) }
+    ['tag_meta', "TEXT DEFAULT '{}'"],
+    // B 站平台算法算出的主题分词：干净、可直接当分类种子，用来交叉验证 UP 主自填标签
+    ['participle', "TEXT DEFAULT '[]'"],
     ['watched', 'INTEGER DEFAULT 0'],
     ['fav_time', 'INTEGER DEFAULT 0'],
     ['invalid', 'INTEGER DEFAULT 0']
@@ -289,6 +314,8 @@ function rowToVideo(row) {
     tname: row.tname || '',
     stat: safeParseStat(row.stat),
     tags: safeParseTags(row.tags),
+    tagMeta: safeParseTagMeta(row.tag_meta),
+    participle: safeParseTags(row.participle),
     watched: row.watched === 1,
     favTime: row.fav_time || 0,
     invalid: row.invalid === 1,
@@ -327,11 +354,46 @@ function safeParseTags(tags) {
   }
 }
 
+// tag_meta 反序列化：{ 标签名: 来源 } 。任何异常都退化成空对象（等同于「来源未知」）
+function safeParseTagMeta(meta) {
+  try {
+    const obj = JSON.parse(meta || '{}')
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {}
+    const out = {}
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'string' && v) out[k] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 // ===== B 站原始标签（作为「默认标签」随视频一起入库）=====
 // 单个视频最多收录 20 个标签（B 站自己的量级也差不多），空值 / 超长 / 重复的一律丢掉
 const MAX_TAGS = 20
+// 平台分词（participle）是「主题词」不是「标签」，可以多一点
+const MAX_PARTICIPLE = 40
 
-function cleanTags(list) {
+// 从简介里抽「#话题#」。B 站的活动话题就是这个格式（#阴阳师十周年#），
+// 严格限定「1~30 个非空白字符 + 收尾 #」，所以不会把「#1」「####」这种误当成话题。
+// 注意：不要拿简介去做全文相似度 —— 充电说明 / 粉丝群 / 套话会把结果带偏。
+function topicsFromDesc(desc) {
+  const s = String(desc || '')
+  const out = []
+  const seen = new Set()
+  const re = /#([^#\s]{1,30})#/g
+  let m
+  while ((m = re.exec(s)) !== null) {
+    const name = m[1].trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    out.push(name)
+  }
+  return out
+}
+
+function cleanTags(list, max = MAX_TAGS) {
   const out = []
   const seen = new Set()
   for (const raw of Array.isArray(list) ? list : []) {
@@ -341,7 +403,7 @@ function cleanTags(list) {
     if (seen.has(key)) continue
     seen.add(key)
     out.push(name)
-    if (out.length >= MAX_TAGS) break
+    if (out.length >= max) break
   }
   return out
 }
@@ -382,7 +444,10 @@ function normalizeTagKey(name) {
 // 把 [{name, count}] 归并成若干「近似标签组」：
 //   [{ name(代表写法), count(合计), variantCount, variants:[{name,count}] }]
 // 代表写法 = 组内出现次数最多的那个（一样多时取更短的），保证主界面显示的是最高频写法。
-function mergeSimilarTags(items) {
+// protectedNames：受保护的标签名，【不参与】前缀包含归并。用来保护活动 / 话题标签 ——
+// 「阴阳师拾此一瞬」是某一期活动，不是「阴阳师」的同义写法，被吸进去就丢了活动信息。
+function mergeSimilarTags(items, protectedNames) {
+  const guards = protectedNames instanceof Set ? protectedNames : new Set()
   const list = (Array.isArray(items) ? items : [])
     .map((it) => ({
       name: String((it && it.name) || '').trim(),
@@ -428,6 +493,7 @@ function mergeSimilarTags(items) {
     const key = keys[i]
     if (key.length < 3) continue // 太短的（含单字）不做包含归并，误伤风险高
     if (TAG_GENERIC.has(list[i].name.toLowerCase())) continue
+    if (guards.has(list[i].name)) continue // 活动 / 话题标签：独立实体，不许被前缀吸走
     const bucket = byFirstChar.get(key[0] || '') || []
     let best = -1
     for (const j of bucket) {
@@ -473,30 +539,168 @@ function mergeSimilarTags(items) {
   return groups.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
 }
 
-// 抓单个视频在 B 站的原始标签。走公开只读接口 /x/tag/archive/tags（匿名也能访问），
-// 比 view/detail 轻得多。失败一律当作「没有标签」—— 标签只是附加信息，
-// 不能因为它失败就中断整批导入。
-async function fetchVideoTags(bvid) {
-  if (!bvid) return { tags: [] }
+// ===== 共前缀族（只做分组展示，绝不落库改写）=====
+// 解决的正是「同前缀 + 不同活动后缀」这一族：阴阳师拾此一瞬 / 阴阳师执火燎原 ——
+// 互不为前缀，上方两条规则（归一化同键、前缀包含）都抓不到，但它们明显同族
+// （同一个活动系列的不同期次）。而且注意：这一族还有个更好的来源 —— B 站 view/detail
+// 里 tag_type='topic' 的标签本身就把活动标签挑出来了，共前缀族是它的补充（覆盖手动标签）。
+//
+// 算法（字典序相邻扫描，O(n log n)，几千个标签毫秒级）：
+//   ① 把标签按归一化 key 排序 —— 排序后共享前缀的标签必然相邻，不用两两比较；
+//   ② 扫相邻两项求最长公共前缀 LCP，够阈值就用并查集并成一族；
+//   ③ 阈值：LCP 里含汉字要 ≥ 3 字（中文 2 字太容易误并，「原神」+「胡桃/钟离」只有 2 字，
+//      于是不会被并 —— 这是刻意的保守取舍）；纯拉丁要 ≥ 5 字母（3 个字母太短）。
+// ⚠️ 族 ≠ 同义词：族内是「同系列的兄弟」，不是同一个东西。所以【绝不能】像
+//    mergeSimilarTagsInDb 那样把它们改写成同一个名字 —— 否则「阴阳师拾此一瞬」会被
+//    写成「阴阳师执火燎原」，数据就毁了。这里只产出分组给界面用。
+function longestCommonPrefixLen(a, b) {
+  const n = Math.min(a.length, b.length)
+  let i = 0
+  while (i < n && a[i] === b[i]) i++
+  return i
+}
+
+// 太「泛」的前缀：以它们开头的标签往往不是同一个系列（「如何学习 A」vs「如何学习 B」），
+// 命中就放弃成族，免得把八竿子打不着的东西捆一起。
+const TAG_PREFIX_STOP = new Set([
+  '如何', '怎么', '怎样', '教你', '带你', '跟我', '一起', '我的', '我们', '这是', '这个',
+  '什么', '那些', '这些', '一个', '关于', '如果', '不要', '别再', '千万', '一定', '真的'
+])
+
+function clusterByCommonPrefix(items, minCount = 2) {
+  const list = (Array.isArray(items) ? items : [])
+    .map((it) => ({ name: String((it && it.name) || '').trim(), count: Number(it && it.count) || 0 }))
+    .filter((it) => it.name && normalizeTagKey(it.name).length >= 3)
+  if (list.length < minCount) return []
+
+  const entries = list.map((it) => ({ ...it, key: normalizeTagKey(it.name) }))
+  entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+
+  const parent = entries.map((_, i) => i)
+  function find(i) {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]]
+      i = parent[i]
+    }
+    return i
+  }
+  function union(a, b) {
+    const ra = find(a)
+    const rb = find(b)
+    if (ra !== rb) parent[rb] = ra
+  }
+
+  for (let i = 1; i < entries.length; i++) {
+    const key = entries[i].key
+    if (TAG_PREFIX_STOP.has(key.slice(0, 2))) continue
+    const lcp = longestCommonPrefixLen(entries[i - 1].key, key)
+    if (lcp < 3) continue
+    const shared = key.slice(0, lcp)
+    const isCJK = /[\u4e00-\u9fff]/.test(shared)
+    if (!isCJK && lcp < 5) continue
+    union(i - 1, i)
+  }
+
+  const groupsMap = new Map()
+  for (let i = 0; i < entries.length; i++) {
+    const root = find(i)
+    if (!groupsMap.has(root)) groupsMap.set(root, [])
+    groupsMap.get(root).push(entries[i])
+  }
+
+  const families = []
+  for (const members of groupsMap.values()) {
+    if (members.length < minCount) continue
+    // 族名 = 全族的最长公共前缀（成员已按 key 排序，逐项收缩即可）
+    let prefix = members[0].key
+    for (const m of members) {
+      prefix = prefix.slice(0, longestCommonPrefixLen(prefix, m.key))
+      if (!prefix) break
+    }
+    const sorted = members
+      .map((m) => ({ name: m.name, count: m.count }))
+      .sort((a, b) => b.count - a.count || a.name.length - b.name.length || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+    const total = sorted.reduce((s, m) => s + m.count, 0)
+    // 总出现次数太少的族（比如两个各出现 1 次的标签）没有展示价值
+    if (total < 3) continue
+    families.push({ name: prefix, count: total, size: sorted.length, members: sorted })
+  }
+  return families.sort((a, b) => b.count - a.count || b.size - a.size)
+}
+
+// 抓单个视频的标签 + 平台分词。走公开只读接口 /x/web-interface/view/detail（匿名可访问）。
+// 为什么不用更轻的 /x/tag/archive/tags？—— 实测两者返回的标签集合【完全一致】，
+// 但 view/detail 额外给了每个标签的 tag_type，等于白送一套分类：
+//   old_channel → UP 主/平台频道标签（真正的「分类」标签，系统的常驻标签）
+//   topic       → 活动 / 话题标签（「阴阳师拾此一瞬」「了不起的旅行家」这类期次族）
+//   bgm         → 「发现《XX》」音乐标签（tag_id=0），丢掉
+// 还有 data.participle —— 平台算法算好的主题分词，比 tag_type 更干净（自动滤掉英文人名等噪音），
+// 拿来做交叉验证：同时出现在 participle 里的标签可信度高，只出现在 tag_type 里的标记为噪音候选。
+// 顺带把 desc / cid / tname / pubdate / stat 一起带回来（反正这一趟已经发了，白捡）。
+// 失败一律当作「没有标签」—— 标签只是附加信息，不能因为它失败就中断整批导入。
+async function fetchVideoDetail(bvid) {
+  const empty = { tags: [], tagMeta: {}, participle: [] }
+  if (!bvid) return empty
   try {
     const res = await biliFetch(
-      `https://api.bilibili.com/x/tag/archive/tags?bvid=${encodeURIComponent(bvid)}`
+      `https://api.bilibili.com/x/web-interface/view/detail?bvid=${encodeURIComponent(bvid)}`
     )
-    if (!res.ok) return { tags: [] }
+    if (!res.ok) return empty
     const data = await res.json()
     if (data.code !== 0) {
       // -412（IP 被拦）/ -352（风控）：标记 blocked，让上层立刻停止继续抓，别越陷越深
       const blocked = data.code === -412 || data.code === -352
-      return { tags: [], blocked, code: data.code }
+      return { ...empty, blocked, code: data.code }
     }
-    return { tags: cleanTags((data.data || []).map((t) => t && t.tag_name)) }
+
+    const d = data.data || {}
+    const tagMeta = {}
+    const names = []
+    for (const t of Array.isArray(d.Tags) ? d.Tags : []) {
+      const name = t && t.tag_name
+      if (!name) continue
+      // bgm 标签（发现《XX》）和 tag_id=0 的一律不要
+      if (t.tag_type === 'bgm' || Number(t.tag_id) === 0) continue
+      const src = t.tag_type === 'topic' ? 'topic' : 'up'
+      // 同名标签以 topic 优先：活动标签的信息量比频道标签大
+      if (!tagMeta[name] || src === 'topic') tagMeta[name] = src
+      names.push(name)
+    }
+
+    const participle = cleanTags(
+      (Array.isArray(d.participle) ? d.participle : []).map((x) => String(x == null ? '' : x).trim()),
+      MAX_PARTICIPLE
+    )
+
+    const view = d.View || {}
+    const stat = view.stat || {}
+    return {
+      tags: cleanTags(names),
+      tagMeta,
+      participle,
+      desc: view.desc || '',
+      cid: view.cid || 0,
+      tname: view.tname || '',
+      pubdate: view.pubdate || 0,
+      stat: {
+        view: stat.view || 0,
+        danmaku: stat.danmaku || 0,
+        like: stat.like || 0,
+        coin: stat.coin || 0,
+        favorite: stat.favorite || 0,
+        share: stat.share || 0,
+        reply: stat.reply || 0
+      }
+    }
   } catch {
-    return { tags: [] }
+    return empty
   }
 }
 
-// 批量抓标签：4 并发 + 每条 180ms 间隔（比失效检测的 4 并发 / 150ms 再保守一档）。
-// 返回 { byBvid, fetched, blocked }；onProgress 形如 { done, total }
+// 批量抓标签：3 并发 + 每条 250ms 间隔。比原来（4 并发 / 180ms）保守一档 ——
+// view/detail 的返回体比 /x/tag/archive/tags 大一个数量级（约 70KB vs 2KB），
+// 放慢节奏能明显降低触发风控的概率。
+// 返回 { byBvid: Map<bvid, {tags, tagMeta, participle, ...}>, fetched, blocked }；onProgress 形如 { done, total }
 async function fetchTagsBatch(bvids, onProgress) {
   const list = Array.isArray(bvids) ? bvids : []
   const byBvid = new Map()
@@ -511,17 +715,57 @@ async function fetchTagsBatch(bvids, onProgress) {
       if (blocked) return
       const i = cursor++
       if (i >= list.length) return
-      const r = await fetchVideoTags(list[i])
+      const r = await fetchVideoDetail(list[i])
       if (r.blocked) blocked = true
-      if (r.tags && r.tags.length) byBvid.set(list[i], r.tags)
+      if (r.tags.length || r.participle.length) byBvid.set(list[i], r)
       done++
       if (typeof onProgress === 'function') onProgress({ done, total: list.length })
-      await new Promise((res) => setTimeout(res, 180))
+      await new Promise((res) => setTimeout(res, 250))
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker))
   return { byBvid, fetched: byBvid.size, blocked }
+}
+
+// 抓取结果 → 入库字段（新记录直接展开用）
+function tagFieldsOf(r) {
+  return {
+    tags: (r && r.tags) || [],
+    tagMeta: (r && r.tagMeta) || {},
+    participle: (r && r.participle) || []
+  }
+}
+
+// 这条记录还缺「标签相关元数据」吗？缺就值得再抓一次。
+// 老库（v1.4.x 存进去的）有 tags 但没有 tag_meta，靠这个判断能在重新导入时自动升级。
+function needsTagFetch(exist) {
+  if (!exist) return true
+  if (!Array.isArray(exist.tags) || exist.tags.length === 0) return true
+  if (!exist.tagMeta || Object.keys(exist.tagMeta).length === 0) return true
+  return false
+}
+
+// 给「已存在」的旧记录补全标签字段：哪个空补哪个，绝不覆盖你手动改过的数据。
+// 重新导入一次收藏夹即可把存量数据升级成「带来源分类 + 平台分词」的形态。
+function backfillTagFields(table, id, got, current) {
+  const sets = []
+  const args = []
+  if (got.tags.length && (!current.tags || current.tags.length === 0)) {
+    sets.push('tags = ?')
+    args.push(JSON.stringify(got.tags))
+  }
+  if (Object.keys(got.tagMeta || {}).length && Object.keys(current.tagMeta || {}).length === 0) {
+    sets.push('tag_meta = ?')
+    args.push(JSON.stringify(got.tagMeta))
+  }
+  if (got.participle.length && (!current.participle || current.participle.length === 0)) {
+    sets.push('participle = ?')
+    args.push(JSON.stringify(got.participle))
+  }
+  if (sets.length === 0) return false
+  db.prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`).run(...args, id)
+  return true
 }
 
 // 按 bvid 查询（判断是否已收录）
@@ -541,6 +785,8 @@ function addVideo(video, source = 'fav') {
     cover = '',
     author = '',
     tags = [],
+    tagMeta = {},
+    participle = [],
     authorFace = '',
     duration = 0,
     cid = 0,
@@ -562,9 +808,9 @@ function addVideo(video, source = 'fav') {
   const info = db
     .prepare(
       `INSERT INTO ${t}
-        (bvid, url, title, cover, author, author_face, duration, cid, description, pubdate, tname, stat, tags, fav_time)
+        (bvid, url, title, cover, author, author_face, duration, cid, description, pubdate, tname, stat, tags, tag_meta, participle, fav_time)
        VALUES
-        (@bvid, @url, @title, @cover, @author, @authorFace, @duration, @cid, @description, @pubdate, @tname, @stat, @tags, @favTime)`
+        (@bvid, @url, @title, @cover, @author, @authorFace, @duration, @cid, @description, @pubdate, @tname, @stat, @tags, @tagMeta, @participle, @favTime)`
     )
     .run({
       bvid,
@@ -580,6 +826,8 @@ function addVideo(video, source = 'fav') {
       tname,
       stat: JSON.stringify(stat),
       tags: JSON.stringify(tags),
+      tagMeta: JSON.stringify(tagMeta || {}),
+      participle: JSON.stringify(participle || []),
       favTime: collectedAt
     })
 
@@ -1048,6 +1296,21 @@ async function checkUpdate(manual = false) {
 // merge 默认开启：把相似写法合并成一组，避免主界面出现几百个近似标签。
 // 每项形如 { name(代表写法), count(合计), variantCount, variants:[{name,count}] }。
 // 传 merge=false 则退化成「一个写法一项」（variants 只有它自己），兼容老调用方。
+// 收集「活动 / 话题」标签名（tag_meta 里标了 topic 的）。
+// 这些是独立实体，不能被前缀包含规则吸进基础标签里。
+function collectTopicNames(source = 'fav') {
+  const t = tableFor(source)
+  const rows = db.prepare(`SELECT tag_meta FROM ${t}`).all()
+  const names = new Set()
+  for (const r of rows) {
+    const meta = safeParseTagMeta(r.tag_meta)
+    for (const [k, v] of Object.entries(meta)) {
+      if (v === 'topic') names.add(k)
+    }
+  }
+  return names
+}
+
 function listTagStats(source = 'fav', merge = true) {
   const t = tableFor(source)
   const rows = db.prepare(`SELECT tags FROM ${t}`).all()
@@ -1063,7 +1326,22 @@ function listTagStats(source = 'fav', merge = true) {
       .map((it) => ({ ...it, variantCount: 1, variants: [it] }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
   }
-  return mergeSimilarTags(flat)
+  return mergeSimilarTags(flat, collectTopicNames(source))
+}
+
+// 标签族：在「原始写法」上做共前缀聚类（合并后的代表写法会丢掉前缀信息）。
+// 例：阴阳师拾此一瞬 / 阴阳师执火燎原 / 阴阳师十周年 → 一族「阴阳师」。
+function listTagFamilies(source = 'fav', minCount = 2) {
+  const t = tableFor(source)
+  const rows = db.prepare(`SELECT tags FROM ${t}`).all()
+  const map = new Map()
+  for (const r of rows) {
+    for (const tag of safeParseTags(r.tags)) {
+      map.set(tag, (map.get(tag) || 0) + 1)
+    }
+  }
+  const flat = [...map.entries()].map(([name, count]) => ({ name, count }))
+  return clusterByCommonPrefix(flat, minCount)
 }
 
 // 一键整合（落库）：把每个「近似标签组」里的次要写法统一改写成组内代表写法。
@@ -1085,26 +1363,121 @@ function mergeSimilarTagsInDb(source = 'fav') {
   }
   if (remap.size === 0) return { ok: true, groups: 0, tags: 0, updated: 0 }
 
-  const rows = db.prepare(`SELECT id, tags FROM ${t}`).all()
-  const updateStmt = db.prepare(`UPDATE ${t} SET tags = ? WHERE id = ?`)
+  const rows = db.prepare(`SELECT id, tags, tag_meta FROM ${t}`).all()
+  const updateStmt = db.prepare(`UPDATE ${t} SET tags = ?, tag_meta = ? WHERE id = ?`)
   let updated = 0
   const run = db.transaction(() => {
     for (const row of rows) {
       const current = safeParseTags(row.tags)
+      const currentMeta = safeParseTagMeta(row.tag_meta)
       const next = []
       for (const tag of current) {
         const mapped = remap.get(tag) || tag
         if (!next.includes(mapped)) next.push(mapped)
       }
-      const same = next.length === current.length && next.every((x, i) => x === current[i])
+      const nextMeta = remapTagMeta(currentMeta, (k) => remap.get(k) || k)
+      const same =
+        next.length === current.length &&
+        next.every((x, i) => x === current[i]) &&
+        JSON.stringify(nextMeta) === JSON.stringify(currentMeta)
       if (!same) {
-        updateStmt.run(JSON.stringify(next), row.id)
+        updateStmt.run(JSON.stringify(next), JSON.stringify(nextMeta), row.id)
         updated++
       }
     }
   })
   run()
   return { ok: true, groups: groups.length, tags, updated }
+}
+
+// ===== 标签总览（标签管理弹窗专用：一次调用拿齐）=====
+// 为什么要一次拿齐：弹窗打开后要同时展示「按来源分组」和「按族折叠」，
+// 拆成三次调用界面会闪三下，一次给完最稳。
+
+// 统计每个标签的来源（多数票），以及「出现在平台分词里」的认证集合。
+// 平票优先级：活动话题 > UP 主频道 > 简介话题 > 未知（信息量大的优先）。
+function computeTagMetaInfo(source = 'fav') {
+  const t = tableFor(source)
+  const rows = db.prepare(`SELECT tags, tag_meta, participle FROM ${t}`).all()
+  const srcCount = new Map()
+  const verified = new Set()
+  for (const r of rows) {
+    const meta = safeParseTagMeta(r.tag_meta)
+    const tags = safeParseTags(r.tags)
+    for (const tag of tags) {
+      let c = srcCount.get(tag)
+      if (!c) {
+        c = { up: 0, topic: 0, desc: 0, unknown: 0 }
+        srcCount.set(tag, c)
+      }
+      c[meta[tag] || 'unknown'] += 1
+    }
+    // 平台分词里出现的标签 = B 站算法认可，标记为「可信标签」，用来交叉验证
+    const part = new Set(safeParseTags(r.participle).map((x) => x.toLowerCase()))
+    for (const tag of tags) {
+      if (part.has(tag.toLowerCase())) verified.add(tag)
+    }
+  }
+  const sources = {}
+  for (const [tag, c] of srcCount) {
+    let best = 'unknown'
+    let bestN = -1
+    for (const k of ['topic', 'up', 'desc', 'unknown']) {
+      if (c[k] > bestN) {
+        bestN = c[k]
+        best = k
+      }
+    }
+    sources[tag] = best
+  }
+  return { sources, verified }
+}
+
+// 弹窗一次最多回传多少个标签组（剩下的让界面自己分页/搜索，别把 IPC 撑爆）
+const TAG_OVERVIEW_LIMIT = 400
+
+function tagOverview(source = 'fav') {
+  const { sources, verified } = computeTagMetaInfo(source)
+  const groups = listTagStats(source, true)
+  const families = listTagFamilies(source, 2)
+
+  const counter = {
+    total: groups.length,
+    topic: 0,
+    up: 0,
+    desc: 0,
+    unknown: 0,
+    verified: 0,
+    families: families.length
+  }
+  const items = groups.slice(0, TAG_OVERVIEW_LIMIT).map((g) => {
+    const src = sources[g.name] || 'unknown'
+    const isVerified = g.variants.some((v) => verified.has(v.name))
+    if (counter[src] !== undefined) counter[src] += 1
+    if (isVerified) counter.verified += 1
+    return {
+      name: g.name,
+      count: g.count,
+      variantCount: g.variantCount,
+      variants: g.variants,
+      source: src,
+      verified: isVerified
+    }
+  })
+  return { groups: items, families, counter }
+}
+
+// 标签改名 / 合并时，把 tag_meta 的键一起跟着挪，否则来源信息会对不上新名字。
+// mapper 返回空串表示这个标签被删掉了，直接丢掉来源记录。
+// 多个旧键并到同一个新键时，活动话题（topic）优先保留 —— 它的信息量最大。
+function remapTagMeta(meta, mapper) {
+  const out = {}
+  for (const [k, v] of Object.entries(meta || {})) {
+    const nk = mapper(k)
+    if (!nk) continue
+    if (!out[nk] || v === 'topic') out[nk] = v
+  }
+  return out
 }
 
 // 标签批量重命名 / 合并 / 删除（作用于整个分区）：
@@ -1125,13 +1498,14 @@ function editTags(fromTags, toTag, source = 'fav') {
   }
 
   const fromSet = new Set(froms)
-  const rows = db.prepare(`SELECT id, tags FROM ${t}`).all()
-  const updateStmt = db.prepare(`UPDATE ${t} SET tags = ? WHERE id = ?`)
+  const rows = db.prepare(`SELECT id, tags, tag_meta FROM ${t}`).all()
+  const updateStmt = db.prepare(`UPDATE ${t} SET tags = ?, tag_meta = ? WHERE id = ?`)
   let updated = 0
 
   const run = db.transaction(() => {
     for (const row of rows) {
       const current = safeParseTags(row.tags)
+      const currentMeta = safeParseTagMeta(row.tag_meta)
       const next = []
       for (const tag of current) {
         if (fromSet.has(tag)) {
@@ -1141,10 +1515,14 @@ function editTags(fromTags, toTag, source = 'fav') {
           next.push(tag)
         }
       }
-      // 只有在标签真的发生变化时才写回，避免把「本来就没变」的记录也算进改动数
-      const same = next.length === current.length && next.every((t, i) => t === current[i])
+      const nextMeta = remapTagMeta(currentMeta, (k) => (fromSet.has(k) ? target : k))
+      // 只有真的发生变化时才写回，避免把「本来就没变」的记录也算进改动数
+      const same =
+        next.length === current.length &&
+        next.every((x, i) => x === current[i]) &&
+        JSON.stringify(nextMeta) === JSON.stringify(currentMeta)
       if (!same) {
-        updateStmt.run(JSON.stringify(next), row.id)
+        updateStmt.run(JSON.stringify(next), JSON.stringify(nextMeta), row.id)
         updated++
       }
     }
@@ -1158,13 +1536,14 @@ function editTags(fromTags, toTag, source = 'fav') {
 // 分区整体统计：总数 / 总时长 / 已看未看 / 失效 / Top 标签 / Top UP主
 function getStats(source = 'fav', topN = 12) {
   const t = tableFor(source)
-  const rows = db.prepare(`SELECT author, duration, watched, invalid, tags FROM ${t}`).all()
+  const rows = db.prepare(`SELECT author, duration, watched, invalid, tags, tag_meta FROM ${t}`).all()
 
   let totalDuration = 0
   let watched = 0
   let invalid = 0
   const authorMap = new Map()
   const tagMap = new Map()
+  const topicNames = new Set()
 
   for (const r of rows) {
     totalDuration += Number(r.duration) || 0
@@ -1175,6 +1554,9 @@ function getStats(source = 'fav', topN = 12) {
     for (const tag of safeParseTags(r.tags)) {
       tagMap.set(tag, (tagMap.get(tag) || 0) + 1)
     }
+    for (const [k, v] of Object.entries(safeParseTagMeta(r.tag_meta))) {
+      if (v === 'topic') topicNames.add(k)
+    }
   }
 
   const topFrom = (map) =>
@@ -1184,7 +1566,10 @@ function getStats(source = 'fav', topN = 12) {
       .slice(0, topN)
 
   // 标签先做相似整合再排行：否则「Python」「python」「Python教程」会各自占一行，Top 榜没参考价值
-  const tagGroups = mergeSimilarTags([...tagMap.entries()].map(([name, count]) => ({ name, count })))
+  const tagGroups = mergeSimilarTags(
+    [...tagMap.entries()].map(([name, count]) => ({ name, count })),
+    topicNames
+  )
 
   return {
     total: rows.length,
@@ -1237,6 +1622,9 @@ function buildExportPayload(source = 'fav', exporter = {}) {
       tname: v.tname,
       stat: v.stat,
       tags: v.tags,
+      // v1.5.0 起随分享一起走：标签来源分类 + 平台分词（旧版本读到会忽略，不影响兼容）
+      tagMeta: v.tagMeta || {},
+      participle: Array.isArray(v.participle) ? v.participle : [],
       watched: v.watched,
       favTime: v.favTime
     }))
@@ -1291,9 +1679,9 @@ function doImportShare(payload) {
   const findStmt = db.prepare('SELECT id FROM shared WHERE bvid = ? AND share_from = ?')
   const insertStmt = db.prepare(
     `INSERT INTO shared
-      (bvid, url, title, cover, author, author_face, duration, description, pubdate, tname, stat, tags, watched, fav_time, share_from, share_mid)
+      (bvid, url, title, cover, author, author_face, duration, description, pubdate, tname, stat, tags, tag_meta, participle, watched, fav_time, share_from, share_mid)
      VALUES
-      (@bvid, @url, @title, @cover, @author, @authorFace, @duration, @description, @pubdate, @tname, @stat, @tags, @watched, @favTime, @shareFrom, @shareMid)`
+      (@bvid, @url, @title, @cover, @author, @authorFace, @duration, @description, @pubdate, @tname, @stat, @tags, @tagMeta, @participle, @watched, @favTime, @shareFrom, @shareMid)`
   )
 
   let added = 0
@@ -1318,6 +1706,8 @@ function doImportShare(payload) {
         tname: v.tname || '',
         stat: JSON.stringify(v.stat || {}),
         tags: JSON.stringify(Array.isArray(v.tags) ? v.tags : []),
+        tagMeta: JSON.stringify(v.tagMeta && typeof v.tagMeta === 'object' ? v.tagMeta : {}),
+        participle: JSON.stringify(Array.isArray(v.participle) ? v.participle : []),
         watched: v.watched ? 1 : 0,
         favTime: Number(v.favTime) || 0,
         shareFrom: fromName,
@@ -1972,14 +2362,9 @@ async function importFavorites(mediaId, onTagsProgress) {
     // 只导入视频（type 2 = 视频；12 = 音频等其它类型跳过）
     const medias = ((data.data && data.data.medias) || []).filter((m) => m && m.type === 2 && m.bvid)
 
-    // 这一页里「还没有标签」的视频：新条目，或已入库但当初没存标签的旧记录。
-    // 已经手动打过标签的记录直接跳过 —— 既不覆盖你的标签，也不浪费请求。
-    const needTags = medias
-      .filter((m) => {
-        const exist = getByBvid(m.bvid, 'fav')
-        return !exist || !Array.isArray(exist.tags) || exist.tags.length === 0
-      })
-      .map((m) => m.bvid)
+    // 这一页里「标签信息不全」的视频：新条目，或已入库但缺标签 / 缺来源分类的旧记录。
+    // 抓全了的直接跳过 —— 既不覆盖你的标签，也不浪费请求。
+    const needTags = medias.filter((m) => needsTagFetch(getByBvid(m.bvid, 'fav'))).map((m) => m.bvid)
 
     const { byBvid, blocked } = needTags.length
       ? await fetchTagsBatch(needTags, onTagsProgress)
@@ -2008,8 +2393,8 @@ async function importFavorites(mediaId, onTagsProgress) {
           share: 0,
           reply: 0
         },
-        // B 站原始标签作为默认标签；抓不到就是空数组（不影响入库）
-        tags: byBvid.get(m.bvid) || [],
+        // B 站原始标签（带来源分类：UP 主频道 / 活动话题）作为默认标签；抓不到就是空数组
+        ...tagFieldsOf(byBvid.get(m.bvid)),
         // B 站收藏时间（秒级时间戳），用于「最新收藏 → 最久之前」排序
         favTime: m.fav_time || 0
       }
@@ -2025,12 +2410,9 @@ async function importFavorites(mediaId, onTagsProgress) {
         if (m.cid && !r.video.cid) {
           db.prepare('UPDATE videos SET cid = ? WHERE id = ?').run(m.cid, r.video.id)
         }
-        // 旧数据没有标签：把这次抓到的补上（重新导入一次即可给存量数据补标签）
-        const gotTags = byBvid.get(m.bvid)
-        if (gotTags && gotTags.length && (!Array.isArray(r.video.tags) || r.video.tags.length === 0)) {
-          db.prepare('UPDATE videos SET tags = ? WHERE id = ?').run(JSON.stringify(gotTags), r.video.id)
-          tagsFilled++
-        }
+        // 旧数据字段不全：把这次抓到的补上（重新导入一次即可给存量数据补标签与来源）
+        const got = byBvid.get(m.bvid)
+        if (got && backfillTagFields('videos', r.video.id, got, r.video)) tagsFilled++
       } else added++
       total++
     }
@@ -2069,13 +2451,8 @@ async function importWatchLater(onTagsProgress) {
   let tagsFilled = 0
   let tagsBlocked = false
 
-  // 只给「还没有标签」的条目抓（新条目 + 旧的无标签记录），手动打过标签的跳过
-  const needTags = list
-    .filter((m) => {
-      const exist = getByBvid(m.bvid, 'toview')
-      return !exist || !Array.isArray(exist.tags) || exist.tags.length === 0
-    })
-    .map((m) => m.bvid)
+  // 只给「标签信息不全」的条目抓（新条目 + 缺标签 / 缺来源分类的旧记录），抓全了的跳过
+  const needTags = list.filter((m) => needsTagFetch(getByBvid(m.bvid, 'toview'))).map((m) => m.bvid)
 
   const { byBvid, blocked } = needTags.length
     ? await fetchTagsBatch(needTags, onTagsProgress)
@@ -2105,8 +2482,8 @@ async function importWatchLater(onTagsProgress) {
         share: stat.share || 0,
         reply: stat.reply || 0
       },
-      // B 站原始标签作为默认标签；抓不到就是空数组（不影响入库）
-      tags: byBvid.get(m.bvid) || [],
+      // B 站原始标签（带来源分类）作为默认标签；抓不到就是空数组
+      ...tagFieldsOf(byBvid.get(m.bvid)),
       // 加入稍后再看的时间（add_at），用于「最新 → 最久之前」排序
       favTime: m.add_at || m.ctime || 0
     }
@@ -2120,12 +2497,9 @@ async function importWatchLater(onTagsProgress) {
       if (m.cid && !r.video.cid) {
         db.prepare('UPDATE toview SET cid = ? WHERE id = ?').run(m.cid, r.video.id)
       }
-      // 旧数据没有标签：把这次抓到的补上
-      const gotTags = byBvid.get(m.bvid)
-      if (gotTags && gotTags.length && (!Array.isArray(r.video.tags) || r.video.tags.length === 0)) {
-        db.prepare('UPDATE toview SET tags = ? WHERE id = ?').run(JSON.stringify(gotTags), r.video.id)
-        tagsFilled++
-      }
+      // 旧数据字段不全：把这次抓到的补上
+      const got = byBvid.get(m.bvid)
+      if (got && backfillTagFields('toview', r.video.id, got, r.video)) tagsFilled++
     } else added++
     total++
   }
@@ -2197,6 +2571,9 @@ ipcMain.handle('batch-delete-videos', safe((ids, source) => batchDeleteVideos(id
 // 标签管理 + 统计面板
 ipcMain.handle('list-tag-stats', safe((source, merge) => listTagStats(source, merge !== false)))
 ipcMain.handle('merge-similar-tags', safe((source) => mergeSimilarTagsInDb(source)))
+// 标签总览（来源分类 + 平台认证标记 + 共前缀族），标签管理弹窗一次拿齐
+ipcMain.handle('tag-overview', safe((source) => tagOverview(source)))
+ipcMain.handle('list-tag-families', safe((source) => listTagFamilies(source)))
 ipcMain.handle('edit-tags', safe((fromTags, toTag, source) => editTags(fromTags, toTag, source)))
 ipcMain.handle('get-stats', safe((source) => getStats(source)))
 
@@ -2370,5 +2747,14 @@ module.exports = {
   normalizeTagKey,
   mergeSimilarTags,
   listTagStats,
-  mergeSimilarTagsInDb
+  mergeSimilarTagsInDb,
+  // v1.5.0：来源分类 + 平台分词交叉验证 + 共前缀族
+  topicsFromDesc,
+  clusterByCommonPrefix,
+  listTagFamilies,
+  collectTopicNames,
+  computeTagMetaInfo,
+  tagOverview,
+  tagFieldsOf,
+  needsTagFetch
 }

@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.4.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.1/Bilibili-Collector-Setup-1.4.1.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.5.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.0/Bilibili-Collector-Setup-1.5.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -40,6 +40,7 @@
 - **导入他人分享**：支持**拖拽 `.json` 文件进窗口**或点「导入分享文件」走系统文件对话框，把别人导出的收藏列表导入进来
 - **下载视频到本地**：列表每行「⬇ 下载」，选清晰度与保存位置后把视频存成本地 `mp4`（音视频自动合并，见下方「下载视频」章节）
 - **自动带上 B 站标签**：导入收藏夹、拉取稍后再看、搜索入库、手动粘贴时，会把视频在 B 站的**原始标签一并抓下来作为默认标签**（单个视频最多 20 个），直接就能拿来筛选；**已经手动打过标签的记录不会被覆盖**
+- **标签带来源分类**：抓标签时顺带拿到 B 站自己给的 `tag_type` 与平台**主题分词** `participle` —— 于是能区分「UP 主频道标签」和「B 站活动 / 话题标签」（如 `阴阳师拾此一瞬`），并用平台分词交叉验证哪些标签更可信
 
 ### 二、浏览与查找
 
@@ -57,7 +58,7 @@
 - **单条编辑**：改标签、改标题、切换看过状态、删除
 - **批量打标签**：给「当前看到的那批视频」一次性追加标签（已存在的自动跳过）
 - **批量删除**：一键删掉「当前看到的那批视频」（带二次确认）
-- **标签管理**：查看每个标签被用了多少次，支持**重命名**、**合并同义标签**（如「学习」+「教程」→「学习」，自动去重）、**删除无用标签**（只摘标签，不动视频）
+- **标签管理**：查看每个标签被用了多少次，支持**重命名**、**合并同义标签**（如「学习」+「教程」→「学习」，自动去重）、**删除无用标签**（只摘标签，不动视频）；弹窗顶部可按**来源筛选**（全部 / 活动话题 / UP 标签 / 平台认证 / 可整合），活动话题带橙色 `活动` 标记、被平台分词认可的带绿色 `✓`，点「🧬 同族」可展开**同前缀的一族**（如 `阴阳师拾此一瞬` / `阴阳师执火燎原` / `阴阳师十周年`），点族名一次勾选全族
 - **失效视频检测与清理**：一键体检，把被删除 / 转私密 / 仅 UP 主可见的稿件标红，再批量清掉
 
 ### 四、数据与统计
@@ -117,7 +118,8 @@
 - **模式**：SQLite **WAL**（读写更稳定，适合频繁小事务）
 - **表**：`videos`（收藏）、`toview`（稍后再看）、`shared`（分享导入）、`search`（搜索导入）
 - **主要字段**：`bvid` / `url` / `title` / `cover` / `author` / `author_face` / `duration` / `description` / `pubdate` / `tname` / `stat`(JSON) / `tags`(JSON) / `watched` / `fav_time`(收录时间戳) / `cid`(用于下载取流) / `invalid`(失效标记) / `created_at`
-- **标签来源**：`tags`（JSON 数组）里既可能是你手动打的标签，也可能是导入时从 B 站一并带下来的原始标签；重新导入时只给「还没有标签」的记录补充，**不会覆盖**你整理过的标签
+- **标签来源**：`tags`（JSON 数组）里既可能是你手动打的标签，也可能是导入时从 B 站一并带下来的原始标签；`tag_meta`（JSON 对象）记录每个标签的来源 —— `up`（UP 主频道标签）/ `topic`（B 站活动话题）/ `desc`（从简介 `#话题#` 里提取的），旧数据没有这一列，界面会显示成「未分类」；`participle`（JSON 数组）存 B 站平台算出的主题分词，用来给标签打「可信」标记
+- **不覆盖原则**：重新导入时只补「标签为空 / 没有来源记录」的字段，**不会覆盖**你整理过的标签与来源信息
 - **`shared` 额外字段**：`share_from`（分享者昵称）、`share_mid`，唯一约束为 `UNIQUE(bvid, share_from)`
 - **自动迁移**：程序启动时用 `PRAGMA table_info` 检查缺哪列就补哪列，老版本数据库可以直接升级，不会丢数据
 
@@ -133,7 +135,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.4.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.1/Bilibili-Collector-Setup-1.4.1.exe) | 约 105 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.5.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.0/Bilibili-Collector-Setup-1.5.0.exe) | 约 105 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -261,9 +263,9 @@ git push origin main
 
 ### 3. 频率控制与风控
 
-- 导入收藏夹时，程序在翻页之间**内置了 1.5 秒延时**；失效检测是**4 并发 + 每条 150ms 间隔**；导入时抓取 B 站标签是**4 并发 + 每条 180ms 间隔**。这些都是用于控制请求频率、避免触发 B 站风控的。**请勿自行调短或移除这些延时**，否则可能触发 `412` 封 IP、弹验证码，甚至导致登录态失效。
+- 导入收藏夹时，程序在翻页之间**内置了 1.5 秒延时**；失效检测是**4 并发 + 每条 150ms 间隔**；导入时抓取 B 站标签是**3 并发 + 每条 250ms 间隔**。这些都是用于控制请求频率、避免触发 B 站风控的。**请勿自行调短或移除这些延时**，否则可能触发 `412` 封 IP、弹验证码，甚至导致登录态失效。
 - 失效检测会逐条请求 B 站，条数多时耗时较长（100 条约十几秒），请耐心等待。
-- 抓取标签同样只能逐条请求（B 站没有批量查标签的接口），100 条约多花 5~7 秒，界面上会显示进度；只给「还没有标签」的记录抓，不会重复请求。
+- 抓取标签同样只能逐条请求（B 站没有批量查标签的接口），100 条约多花 8~10 秒，界面上会显示进度；只给「标签信息不全」的记录抓（新记录，或已导入但缺标签来源的旧记录），抓全的不再重复请求。
 
 ### 4. 失效判定是「保守策略」
 
@@ -332,7 +334,7 @@ bilibili-collector/
 | 抓取 | `fetch-video-info` |
 | 增删改查 | `save-video` / `list-videos` / `search-videos` / `update-video` / `delete-video` |
 | 批量 | `batch-add-tags` / `batch-delete-videos` |
-| 标签与统计 | `list-tag-stats` / `edit-tags` / `get-stats` |
+| 标签与统计 | `list-tag-stats` / `tag-overview` / `list-tag-families` / `merge-similar-tags` / `edit-tags` / `get-stats` |
 | 失效检测 | `check-invalid`（进度通过 `check-invalid-progress` 事件回报） |
 | 登录与导入 | `check-login` / `open-login` / `logout` / `list-fav-folders` / `import-favorites` / `import-watch-later`（抓标签进度通过 `import-tags-progress` 事件回报）|
 | 分享 | `export-videos` / `pick-share-file` / `import-share-data` |
@@ -344,6 +346,23 @@ bilibili-collector/
 ---
 
 ## 更新内容（CHANGELOG）
+
+### v1.5.0（2026-10-11）
+
+让标签**带上来源与分类**，并把「同前缀一族」摆到台面上（**全程零 AI、零额外请求**）：
+
+- **换用更值钱的接口**：抓标签从 `/x/tag/archive/tags` 换成 `/x/web-interface/view/detail`。实测两者返回的标签集合**完全一致**，但后者额外给了每个标签的 `tag_type`，等于白送一套分类：
+  - `old_channel` → **UP 主频道标签**（系统的常驻标签）
+  - `topic` → **B 站活动 / 话题标签**（`阴阳师拾此一瞬`、`了不起的旅行家`、`搞笑小剧场` 这类期次族）
+  - `bgm` → 「发现《XX》」音乐标签，直接丢掉
+  顺带把 `desc` / `cid` / `tname` / `pubdate` / `stat` 也带回来（反正这一趟已经发了）
+- **平台分词交叉验证**：`data.participle` 是 B 站算法算出的主题分词，比自填标签干净（实测会自动滤掉 `Xin Li`、`Leping Shen` 这类英文人名噪音）。同时出现在 participle 里的标签标上绿色 `✓`，可信度更高；只出现在 `tag_type` 里的视为噪音候选
+- **简介话题兜底**：从简介里按 `#话题#` 严格格式抽活动话题（不会误抓 `#1` 这种），标来源为 `desc`
+- **活动标签受保护**：`tag_type='topic'` 的标签**不参与**前缀包含归并 —— 否则 `阴阳师拾此一瞬` 会被吸进 `阴阳师` 里、活动信息就丢了
+- **共前缀族**：新增 `clusterByCommonPrefix`，用「字典序排序 + 相邻求最长公共前缀 + 并查集」抓 `阴阳师拾此一瞬` / `阴阳师执火燎原` 这类**互不为前缀**的族（O(n log n)，几千个标签毫秒级）。阈值取「含汉字 ≥ 3 字 / 纯拉丁 ≥ 5 字母」，并有一张泛前缀停用词表（`如何`、`教你`…）防误并。**只分组展示，绝不落库改写**
+- **标签管理弹窗升级**：顶部显示「共 N 个标签 · 活动话题 N · 平台认证 N · 同族 N」，新增来源筛选胶囊（全部 / 活动话题 / UP 标签 / 认证 / 可整合），活动标签带橙色 `活动` 标记，点 `🧬 同族` 展开族列表、点族名一次勾选全族；主界面列表里活动标签也单独标色
+- **存量数据自动升级**：重新导入一次收藏夹即可给旧记录补上标签来源与分词（只补空的字段，**不覆盖**你手动改过的数据）。抓取节奏同步从 4 并发 / 180ms 调整为 **3 并发 / 250ms**（`view/detail` 返回体大一个数量级，放慢更稳）
+- **改名 / 合并同步**：重命名、一键整合相似标签时，`tag_meta` 的键会跟着一起挪，来源信息不会对不上新名字
 
 ### v1.4.1（2026-10-11）
 

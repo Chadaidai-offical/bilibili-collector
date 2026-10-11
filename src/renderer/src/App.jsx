@@ -134,6 +134,11 @@ function App() {
   const [showStats, setShowStats] = useState(false)
   const [showTagManager, setShowTagManager] = useState(false)
   const [tagStats, setTagStats] = useState([])
+  // 标签来源分类（UP 主频道 / 活动话题 / 简介话题）+ 平台分词认证 + 共前缀族
+  const [tagFamilies, setTagFamilies] = useState([])
+  const [tagCounter, setTagCounter] = useState(null)
+  const [tagMgrFilter, setTagMgrFilter] = useState('all')
+  const [showTagFamilies, setShowTagFamilies] = useState(false)
   const [selectedTags, setSelectedTags] = useState([])
   const [renameTo, setRenameTo] = useState('')
   const [tagBusy, setTagBusy] = useState(false)
@@ -673,14 +678,28 @@ function App() {
   }
 
   // ===== 标签管理 =====
+  // 拉取标签总览：一次拿齐「合并后的标签组（带来源与认证标记）+ 共前缀族 + 汇总计数」。
+  // 为什么不用 listTagStats：那个只给名字和次数，标签管理要靠来源分类和「同族」来分组展示。
+  async function loadTagData() {
+    const res = await window.api.tagOverview(source)
+    if (res && res.error) {
+      setError(res.error)
+      return
+    }
+    setTagStats(Array.isArray(res && res.groups) ? res.groups : [])
+    setTagFamilies(Array.isArray(res && res.families) ? res.families : [])
+    setTagCounter((res && res.counter) || null)
+  }
+
   // 打开标签管理：拉取该分区全部标签及使用次数
   async function openTagManager() {
     setShowTagManager(true)
     setSelectedTags([])
     setRenameTo('')
+    setTagMgrFilter('all')
+    setShowTagFamilies(false)
     try {
-      const res = await window.api.listTagStats(source)
-      setTagStats(Array.isArray(res) ? res : [])
+      await loadTagData()
     } catch (err) {
       setError(err.message || '读取标签失败')
     }
@@ -691,6 +710,15 @@ function App() {
     return g && g.variants && g.variants.length ? g.variants.map((v) => v.name) : [g.name]
   }
   const allTagNames = useMemo(() => tagStats.flatMap((g) => groupNames(g)), [tagStats])
+
+  // 标签管理里的来源筛选：活动话题 / UP 主频道标签 / 平台认证 / 有相似写法
+  const visibleTagStats = useMemo(() => {
+    if (tagMgrFilter === 'topic') return tagStats.filter((g) => g.source === 'topic')
+    if (tagMgrFilter === 'up') return tagStats.filter((g) => g.source === 'up' || !g.source)
+    if (tagMgrFilter === 'verified') return tagStats.filter((g) => g.verified)
+    if (tagMgrFilter === 'dup') return tagStats.filter((g) => g.variantCount > 1)
+    return tagStats
+  }, [tagStats, tagMgrFilter])
 
   // 勾选一个标签组 = 勾选组内全部写法（重命名 / 删除会一起作用到这些写法上）
   function toggleTagSelect(group) {
@@ -734,8 +762,7 @@ function App() {
       setSelectedTags([])
       setRenameTo('')
       setTagExpanded(new Set())
-      const list = await window.api.listTagStats(source)
-      setTagStats(Array.isArray(list) ? list : [])
+      await loadTagData()
       refresh(keyword, source)
     } catch (err) {
       setError(err.message || '整合相似标签失败')
@@ -787,8 +814,7 @@ function App() {
       if (res && res.ok) flash(`${okText}（影响 ${res.updated} 条记录）`)
       setSelectedTags([])
       setRenameTo('')
-      const list = await window.api.listTagStats(source)
-      setTagStats(Array.isArray(list) ? list : [])
+      await loadTagData()
       refresh(keyword, source)
     } catch (err) {
       setError(err.message || '标签操作失败')
@@ -1750,11 +1776,19 @@ function App() {
                     ) : v.tags.length > 0 ? (
                       <>
                         {/* 一条视频最多 20 个标签，全铺开会把列表撑得很长，所以默认只留前 3 个 */}
-                        {(tagExpanded.has(v.id) ? v.tags : v.tags.slice(0, 3)).map((t) => (
-                          <span key={t} className="tag">
-                            {t}
-                          </span>
-                        ))}
+                        {(tagExpanded.has(v.id) ? v.tags : v.tags.slice(0, 3)).map((t) => {
+                          // 活动 / 话题标签单独标色：它们是「某一期的活动」，和普通分类标签不是一类东西
+                          const isTopic = (v.tagMeta || {})[t] === 'topic'
+                          return (
+                            <span
+                              key={t}
+                              className={`tag ${isTopic ? 'tag-topic' : ''}`}
+                              title={isTopic ? `${t}（B 站活动 / 话题标签）` : t}
+                            >
+                              {t}
+                            </span>
+                          )
+                        })}
                         {v.tags.length > 3 && (
                           <button
                             className="tag-more"
@@ -1805,6 +1839,55 @@ function App() {
           <div className="modal tag-modal">
             <h3>标签管理 · {sourceLabel}</h3>
 
+            {tagCounter && (
+              <div className="tag-mgr-summary">
+                <span>共 {tagCounter.total} 个标签</span>
+                <span className="dot">·</span>
+                <span>活动话题 {tagCounter.topic}</span>
+                <span className="dot">·</span>
+                <span>平台认证 {tagCounter.verified}</span>
+                <span className="dot">·</span>
+                <span>同族 {tagCounter.families}</span>
+                {tagCounter.unknown > 0 && (
+                  <>
+                    <span className="dot">·</span>
+                    <span title="旧数据没记录标签来源，重新导入一次收藏夹即可补上">
+                      未分类 {tagCounter.unknown}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {tagStats.length > 0 && (
+              <div className="tag-mgr-filters">
+                {[
+                  ['all', `全部 ${tagCounter ? tagCounter.total : tagStats.length}`],
+                  ['topic', `活动话题 ${tagCounter ? tagCounter.topic : 0}`],
+                  ['up', 'UP 标签'],
+                  ['verified', `认证 ${tagCounter ? tagCounter.verified : 0}`],
+                  ['dup', `可整合 ${tagStats.filter((g) => g.variantCount > 1).length}`]
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={`tag-chip ${tagMgrFilter === key ? 'on' : ''}`}
+                    onClick={() => setTagMgrFilter(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                {tagFamilies.length > 0 && (
+                  <button
+                    className={`tag-chip ${showTagFamilies ? 'on' : ''}`}
+                    onClick={() => setShowTagFamilies((v) => !v)}
+                    title="同前缀的一族（阴阳师拾此一瞬 / 阴阳师执火燎原 …）"
+                  >
+                    🧬 同族 {tagFamilies.length}
+                  </button>
+                )}
+              </div>
+            )}
+
             {tagStats.length === 0 ? (
               <div className="empty">这个分区还没有任何标签～</div>
             ) : (
@@ -1843,8 +1926,38 @@ function App() {
                   </div>
                 </div>
 
+                {showTagFamilies && tagFamilies.length > 0 && (
+                  <div className="tag-family-panel">
+                    <div className="tag-family-title">
+                      同族标签（同前缀的一族）。点族名可一次勾选全族，但<b>不会被自动合并</b> ——
+                      「阴阳师拾此一瞬」和「阴阳师执火燎原」是同一系列的不同期，不是同一个标签。
+                    </div>
+                    {tagFamilies.slice(0, 30).map((f) => (
+                      <div key={f.name} className="tag-family-row">
+                        <button
+                          className="tag-family-name"
+                          onClick={() =>
+                            setSelectedTags((prev) => [
+                              ...new Set([...prev, ...f.members.map((m) => m.name)])
+                            ])
+                          }
+                          title="把这一族全部勾选"
+                        >
+                          {f.name} · {f.size}
+                        </button>
+                        <span className="tag-family-members">
+                          {f.members.map((m) => m.name).join(' / ')}
+                        </span>
+                      </div>
+                    ))}
+                    {tagFamilies.length > 30 && (
+                      <div className="tag-family-more">…还有 {tagFamilies.length - 30} 族</div>
+                    )}
+                  </div>
+                )}
+
                 <div className="tag-mgr-list">
-                  {tagStats.map((g) => {
+                  {visibleTagStats.map((g) => {
                     const names = groupNames(g)
                     const on = names.every((n) => selectedTags.includes(n))
                     return (
@@ -1859,6 +1972,21 @@ function App() {
                       >
                         <input type="checkbox" checked={on} onChange={() => toggleTagSelect(g)} />
                         <span className="tag-mgr-name">{g.name}</span>
+                        {g.source === 'topic' && (
+                          <span className="tag-src src-topic" title="B 站活动 / 话题标签">
+                            活动
+                          </span>
+                        )}
+                        {g.source === 'desc' && (
+                          <span className="tag-src src-desc" title="从视频简介的 #话题# 里提出来的">
+                            话题
+                          </span>
+                        )}
+                        {g.verified && (
+                          <span className="tag-verified" title="B 站平台分词（participle）也认这个词，可信度高">
+                            ✓
+                          </span>
+                        )}
                         {g.variantCount > 1 && (
                           <span className="tag-mgr-merged">⊞{g.variantCount}</span>
                         )}
@@ -1866,6 +1994,9 @@ function App() {
                       </label>
                     )
                   })}
+                  {visibleTagStats.length === 0 && (
+                    <div className="empty">这个筛选下没有标签～</div>
+                  )}
                 </div>
 
                 <div className="tag-mgr-rename">
@@ -1909,6 +2040,9 @@ function App() {
                 <p className="tag-mgr-tip">
                   列表里带 <b>⊞N</b> 的是「相似标签组」，代表写法取组内最高频的那个；
                   勾选一组等于勾选组内全部写法。重命名 / 合并 / 删除只改标签名，不影响视频。
+                  <br />
+                  标 <b className="tip-topic">活动</b> 的是 B 站活动 / 话题标签（同一个活动的不同期次会各自成条，
+                  <b>不会被自动合并</b>）；带 <b>✓</b> 的是被 B 站平台分词认可的标签，可信度更高。
                   想一次收拾干净就点「🔗 一键整合相似标签」。
                 </p>
               </>
