@@ -4,6 +4,12 @@
 
 > 说明：这是一个**个人自用**的收藏整理工具，**不是** B 站第三方客户端，也不复刻 B 站的播放功能。数据全部存在本地，不经过任何服务器。
 
+### 📥 直接下载
+
+**[⬇️ Bilibili-Collector-Setup-1.1.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.1.0/Bilibili-Collector-Setup-1.1.0.exe)** —— Windows 10/11 (x64)，约 84 MB，双击安装即可
+
+也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
+
 ---
 
 ## 目录
@@ -114,9 +120,34 @@
 
 ## 安装与使用
 
-### 方式一：直接下载（推荐给普通用户）
+### 方式一：直接下载安装（推荐给普通用户）
 
-到 [Releases](../../releases) 页面下载最新的 `.exe` 安装包，双击安装即可。当前仅提供 Windows 版本。
+**下载地址**（当前仅提供 Windows 版本）：
+
+| 平台 | 文件 | 大小 |
+|------|------|------|
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.1.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.1.0/Bilibili-Collector-Setup-1.1.0.exe) | 约 84 MB |
+
+也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
+
+**安装步骤**
+
+1. 下载上面的 `.exe` 安装包
+2. 双击运行
+3. 若弹出「Windows 已保护你的电脑」（SmartScreen），点「**更多信息**」→「**仍要运行**」即可 —— 安装包未做代码签名，出现该提示属正常现象
+4. 选择安装目录（默认即可）→ 一路「下一步」完成安装
+5. 从开始菜单或桌面快捷方式启动「**B站收藏管理**」
+
+**系统要求**
+
+- Windows 10 / 11（64 位）
+- 部分功能需要联网并登录 B 站账号：导入收藏夹、拉取稍后再看、失效视频检测
+
+**卸载**
+
+控制面板 → 程序和功能 → 找到「**B站收藏管理**」→ 卸载。
+
+> 卸载**不会**删除你的数据。数据存在 `%APPDATA%\bilibili-collector\`，卸载后仍然保留，重装即可继续用；如需彻底清除，手动删掉该目录即可（**删除前建议先用「导出列表」备份一份**）。
 
 ### 方式二：从源码运行（开发者）
 
@@ -141,6 +172,25 @@ npm run package
 > ```
 
 > ⚠️ `better-sqlite3` 是原生模块，需按 Electron 的 ABI 编译。若 `npm install` 后启动报模块版本不匹配，执行 `npx electron-rebuild -f -w better-sqlite3` 重建。
+
+### 发布新版本
+
+```bash
+# 1. 升版本号（同步改 package.json 的 version）
+# 2. 打包出安装包（产物在 dist/）
+npm run package
+
+# 3. 提交并推送代码
+git add -A && git commit -m "release: vX.Y.Z"
+git push origin main
+
+# 4. 在 GitHub 仓库的 Releases 页面「Draft a new release」
+#    - 选择/新建 tag（如 vX.Y.Z）
+#    - 上传 dist/ 下的「B站收藏管理 Setup X.Y.Z.exe」
+#    - 填写更新说明后发布
+```
+
+> 安装包约 84 MB，**不要**提交进 Git 仓库（`dist/` 已在 `.gitignore` 中），只作为 Release 附件上传。
 
 ---
 
@@ -256,6 +306,7 @@ bilibili-collector/
 - **分享导出 / 导入**：导出为紧凑 JSON（无缩进 + 简介截断 200 字，约 961 字节/条，自带导出者账号名）；导入支持拖拽 `.json` 进窗口或走系统文件对话框，进入独立的「分享导入」分区，按分享者区分来源并去重
 - **标签管理**：标签使用次数统计、重命名、合并同义标签（自动去重）、删除无用标签
 - **统计面板与多种排序**：顶部大字号显示收藏总数与收藏总时长，可展开查看 Top 标签与 Top 收藏 UP 主；新增 6 种排序方式
+- **提供安装包**：发布 Windows x64 的 NSIS 安装包（约 84 MB），可直接下载安装，无需配置任何环境
 
 ### v1.0.0（2026-10-10）
 
