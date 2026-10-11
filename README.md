@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.2.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.2.0/Bilibili-Collector-Setup-1.2.0.exe)** —— Windows 10/11 (x64)，约 84 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.3.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.3.0/Bilibili-Collector-Setup-1.3.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -20,6 +20,7 @@
 - [技术栈](#技术栈)
 - [数据存储](#数据存储)
 - [安装与使用](#安装与使用)
+- [下载视频](#下载视频)
 - [开发指南](#开发指南)
 - [注意事项（请务必阅读）](#注意事项请务必阅读)
 - [项目结构](#项目结构)
@@ -37,6 +38,7 @@
 - **拉取「稍后再看」**：一键把 B 站「稍后再看」列表整个拉下来，存进独立分区
 - **搜索 B 站全站**：输入关键词直接搜 B 站全站视频（走官方网页端接口 + wbi 签名），结果是**预览勾选**式的——你自己挑要哪些再入库，存进「搜索导入」分区
 - **导入他人分享**：支持**拖拽 `.json` 文件进窗口**或点「导入分享文件」走系统文件对话框，把别人导出的收藏列表导入进来
+- **下载视频到本地**：列表每行「⬇ 下载」，选清晰度与保存位置后把视频存成本地 `mp4`（音视频自动合并，见下方「下载视频」章节）
 
 ### 二、浏览与查找
 
@@ -113,7 +115,7 @@
 - **位置**：`%APPDATA%\bilibili-collector\bilibili-collector.db`（Electron 的 `userData` 目录）
 - **模式**：SQLite **WAL**（读写更稳定，适合频繁小事务）
 - **表**：`videos`（收藏）、`toview`（稍后再看）、`shared`（分享导入）、`search`（搜索导入）
-- **主要字段**：`bvid` / `url` / `title` / `cover` / `author` / `author_face` / `duration` / `description` / `pubdate` / `tname` / `stat`(JSON) / `tags`(JSON) / `watched` / `fav_time`(收录时间戳) / `invalid`(失效标记) / `created_at`
+- **主要字段**：`bvid` / `url` / `title` / `cover` / `author` / `author_face` / `duration` / `description` / `pubdate` / `tname` / `stat`(JSON) / `tags`(JSON) / `watched` / `fav_time`(收录时间戳) / `cid`(用于下载取流) / `invalid`(失效标记) / `created_at`
 - **`shared` 额外字段**：`share_from`（分享者昵称）、`share_mid`，唯一约束为 `UNIQUE(bvid, share_from)`
 - **自动迁移**：程序启动时用 `PRAGMA table_info` 检查缺哪列就补哪列，老版本数据库可以直接升级，不会丢数据
 
@@ -129,7 +131,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.2.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.2.0/Bilibili-Collector-Setup-1.2.0.exe) | 约 84 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.3.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.3.0/Bilibili-Collector-Setup-1.3.0.exe) | 约 105 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -193,7 +195,28 @@ git push origin main
 #    - 填写更新说明后发布
 ```
 
-> 安装包约 84 MB，**不要**提交进 Git 仓库（`dist/` 已在 `.gitignore` 中），只作为 Release 附件上传。
+> 安装包约 105 MB（含内置 ffmpeg），**不要**提交进 Git 仓库（`dist/` 已在 `.gitignore` 中），只作为 Release 附件上传。
+
+---
+
+## 下载视频
+
+在列表里点任意视频右侧的「**⬇ 下载**」，选清晰度与保存位置，即可把它的音视频合并成 `.mp4` 存到本地，文件名格式为 `标题-BV号.mp4`（标题里的非法字符会自动替换）。
+
+**清晰度与登录态**：程序先请求一次取流接口，把**你这个账号实际能拿到的档位**列出来（默认选中 1080P，拿不到的自动往下退并标注）。**1080P 及以上通常需要登录 B 站账号**；未登录只能拿到 360P / 480P 这类低清晰度。
+
+**为什么要内置 ffmpeg**：B 站 DASH 流是**音视频分开**的（视频流 + 音频流），必须合并才能得到可播放的 `mp4`。安装包已自带精简版 `ffmpeg.exe`（gyan.dev essentials build，约 79 MB），**开箱即用、无需另装**。程序查找顺序为「安装包内置资源 → 项目 `resources/ffmpeg` → 系统 PATH」，所以直接跑源码时用系统已装的 ffmpeg 也可以。合并采用 `-c copy` **流拷贝**——不重新编码，无损且秒级完成。
+
+下载过程会显示「视频 / 音频 / 合并」三个阶段与百分比，**可随时取消**；主下载地址失败会自动切换备份地址。
+
+**不支持的场景**（会给出明确提示，不做绕权处理）：
+
+| 场景 | 说明 |
+|------|------|
+| 充电专属视频 | 走的是同一个取流接口，但**鉴权在服务端**——账号必须有对应充电记录才能拿到流 |
+| PGC 番剧 / 付费课程 | 接口不同，**不支持** |
+
+> 下载功能的定位是**个人自用备份**（把收藏 / 稍后再看的视频存到本地离线看）。请**不要**用于二次分发或商用，也不要指望它绕过任何付费权限。
 
 ---
 
@@ -207,7 +230,7 @@ git push origin main
 - **预加载层**（`src/preload/index.js`）：用 `contextBridge` 把 IPC 能力以 `window.api.xxx` 的形式安全地暴露给前端（渲染进程 `sandbox: false`，无 Node 权限）
 - **渲染进程**（`src/renderer/`）：React 界面，只调用 `window.api.*`，不直接碰数据库
 
-**数据分区靠白名单映射**：`SOURCE_TABLES = { fav: 'videos', toview: 'toview', shared: 'shared' }` + `tableFor(source)`，所有 SQL 表名都从白名单取，避免拼接注入。
+**数据分区靠白名单映射**：`SOURCE_TABLES = { fav: 'videos', toview: 'toview', shared: 'shared', search: 'search' }` + `tableFor(source)`，所有 SQL 表名都从白名单取，避免拼接注入。
 
 ### 调试技巧
 
@@ -267,6 +290,13 @@ git push origin main
 - 程序对此已做处理：**API 失败会自动降级到备用通道**（仓库 `package.json` → jsDelivr CDN）重新核对版本；自动检查还带 **30 分钟缓存**，不会每次启动都去请求。
 - 万一所有通道都失败，界面会给一个**「前往下载页」**按钮，直接手动去 Release 页面看最新版本即可，不影响任何其它功能。
 
+### 9. 下载功能的使用边界
+
+- 下载依赖 B 站网页端的**取流接口**，能拿到的清晰度上限**取决于你的账号**：未登录只有低清，1080P 及以上一般需要登录，部分高码率档位还需要大会员。
+- 程序**不做任何绕过付费 / 权限的处理**——充电专属、PGC 番剧、付费课程均不支持，请勿期望用它解锁受限内容。
+- 下载 CDN 流必须携带 `Referer`（程序已内置），否则会被回 403。
+- 请把下载内容用于**个人自用备份**，不要二次分发或商用。
+
 ---
 
 ## 项目结构
@@ -275,15 +305,17 @@ git push origin main
 bilibili-collector/
 ├── src/
 │   ├── main/
-│   │   └── index.js          # 主进程：窗口 + 抓取 + SQLite + 登录/导入 + 失效检测 + 导出导入 + 全站搜索 + 检查更新 + IPC
+│   │   └── index.js          # 主进程：窗口 + 抓取 + SQLite + 登录/导入 + 失效检测 + 导出导入 + 全站搜索 + 视频下载 + 检查更新 + IPC
 │   ├── preload/
 │   │   └── index.js          # 安全桥接层：把主进程能力暴露成 window.api.*
 │   └── renderer/
 │       ├── index.html
 │       └── src/
 │           ├── main.jsx
-│           ├── App.jsx       # 主界面：分区 / 列表 / 筛选 / 排序 / 统计 / 标签管理 / 搜索 / 更新提示
+│           ├── App.jsx       # 主界面：分区 / 列表 / 筛选 / 排序 / 统计 / 标签管理 / 搜索 / 下载 / 更新提示
 │           └── index.css     # 样式（B站粉配色）
+├── resources/
+│   └── ffmpeg/               # 内置 ffmpeg.exe（下载时合并音视频流；exe 不入库，打包时自动塞进安装包）
 ├── electron.vite.config.mjs  # electron-vite 配置
 ├── electron-builder.yml      # 打包配置
 ├── LICENSE
@@ -302,12 +334,25 @@ bilibili-collector/
 | 登录与导入 | `check-login` / `open-login` / `logout` / `list-fav-folders` / `import-favorites` / `import-watch-later` |
 | 分享 | `export-videos` / `pick-share-file` / `import-share-data` |
 | 全站搜索 | `search-bili`（wbi 签名）/ `import-search-items` |
+| 视频下载 | `get-video-qualities` / `pick-save-path` / `download-video`（进度通过 `download-progress` 事件回报）/ `cancel-download` |
 | 更新 | `check-update` / `open-external` |
 | 其它 | `open-bilibili` |
 
 ---
 
 ## 更新内容（CHANGELOG）
+
+### v1.3.0（2026-10-11）
+
+新增「下载视频到本地」功能（方案：自研 playurl + 内置 ffmpeg）：
+
+- **单个视频下载**：列表每行新增「⬇ 下载」按钮，选择清晰度与保存位置后下载，输出 `标题-BV号.mp4`
+- **清晰度档位按账号实际能力渲染**：一次请求拿回该账号可用的全部档位（默认选中 1080P，拿不到的自动往下退并标注）；**1080P 及以上需要登录态**，未登录只能拿到低清晰度
+- **音视频自动合并**：B 站 DASH 是音视频分离流，程序下载视频流 + 音频流后用内置 `ffmpeg` 以 `-c copy` 流拷贝合并（无损、秒级完成），并加 `-movflags +faststart` 便于拖动播放
+- **流式下载 + 进度回报**：边下边写盘，界面显示「视频 / 音频 / 合并」阶段与百分比，可随时取消；主下载地址失败自动切换备份地址
+- **内置 ffmpeg**：安装包自带精简版 `ffmpeg.exe`（gyan.dev essentials build，约 79 MB），**开箱即用，无需另装**；查找顺序为「打包资源 → 项目 `resources` → 系统 PATH」，源码运行时也能直接用系统 ffmpeg
+- **数据库**：四张表新增 `cid` 字段（下载取流必需），老库启动时自动补列；已有记录缺失 `cid` 时，下载前会即时查询并回填
+- **不支持的场景**（会给出明确提示）：充电专属视频（鉴权在服务端，需账号有充电记录）、PGC 番剧 / 付费课堂（接口不同）——**本功能仅供个人自用，不绕开任何付费权限，请勿二次分发**
 
 ### v1.2.0（2026-10-11）
 

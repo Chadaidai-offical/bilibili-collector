@@ -63,6 +63,24 @@ const EMPTY_STATS = {
   topAuthors: []
 }
 
+// 下载阶段的中文文案
+const DL_STAGE_LABEL = {
+  video: '下载视频流',
+  audio: '下载音频流',
+  merging: '合并音视频',
+  done: '完成'
+}
+
+// 默认文件名：标题（清洗 Windows 非法字符）- BV号.mp4
+function dlFileName(title, bvid) {
+  const clean = String(title || '')
+    .replace(/[\\/:*?"<>|\r\n\t]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+  return `${clean || 'video'}-${bvid}.mp4`
+}
+
 function App() {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
@@ -127,6 +145,14 @@ function App() {
   const [selectedFolder, setSelectedFolder] = useState('')
   const [importing, setImporting] = useState(false)
 
+  // 视频下载：先选清晰度（拉 accept_quality 列表），再选保存位置并下载
+  const [dlVideo, setDlVideo] = useState(null) // 打开清晰度弹窗的目标视频
+  const [dlQualities, setDlQualities] = useState([])
+  const [dlLoadingQ, setDlLoadingQ] = useState(false)
+  const [dlQuality, setDlQuality] = useState(80)
+  const [dlBusy, setDlBusy] = useState(false)
+  const [dlProgress, setDlProgress] = useState(null) // { jobId, stage, percent }
+
   // 刷新列表（带关键词搜索），按当前分区取数；顺带刷新该分区的整体统计
   async function refresh(key = keyword, src = source) {
     try {
@@ -162,6 +188,16 @@ function App() {
   // 订阅失效检测的进度事件（主进程逐条检测时回报）
   useEffect(() => {
     const off = window.api.onCheckInvalidProgress((p) => setCheckProgress(p))
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [])
+
+  // 订阅下载进度（主进程逐块下载时回报；只认当前任务，避免串台）
+  useEffect(() => {
+    const off = window.api.onDownloadProgress((p) => {
+      setDlProgress((prev) => (prev && prev.jobId === p.jobId ? { ...prev, ...p } : prev))
+    })
     return () => {
       if (typeof off === 'function') off()
     }
@@ -740,6 +776,85 @@ function App() {
     }
   }
 
+  // ===== 视频下载 =====
+  // 点「下载」：先拉该视频可用的清晰度列表，再弹选择框
+  async function handleDownloadClick(video) {
+    if (dlBusy) return
+    setError('')
+    setDlVideo(video)
+    setDlQualities([])
+    setDlQuality(80)
+    setDlLoadingQ(true)
+    try {
+      const res = await window.api.getVideoQualities(video.bvid, source)
+      if (!res || res.error) {
+        setError((res && res.error) || '获取清晰度失败')
+        setDlVideo(null)
+        return
+      }
+      const list = Array.isArray(res.qualities) ? res.qualities : []
+      setDlQualities(list)
+      // 默认目标 1080P；账号拿不到就挑可用档位里最高的
+      const available = list.filter((q) => q.available)
+      const prefer = available.find((q) => q.qn === 80)
+      if (prefer) setDlQuality(prefer.qn)
+      else if (available.length > 0) setDlQuality(available[0].qn)
+      else if (list.length > 0) setDlQuality(list[0].qn)
+    } catch (err) {
+      setError(err.message || '获取清晰度失败')
+      setDlVideo(null)
+    } finally {
+      setDlLoadingQ(false)
+    }
+  }
+
+  // 确认下载：选保存位置 → 调主进程下载 → 全程进度回报
+  async function handleConfirmDownload() {
+    if (!dlVideo) return
+    const video = dlVideo
+    const qn = dlQuality
+    try {
+      const picked = await window.api.pickSavePath(dlFileName(video.title, video.bvid))
+      if (!picked || picked.canceled) return
+      if (picked.error) {
+        setError(picked.error)
+        return
+      }
+
+      const jobId = `${Date.now()}-${video.bvid}`
+      setDlVideo(null)
+      setDlBusy(true)
+      setDlProgress({ jobId, stage: 'video', percent: 0 })
+
+      const res = await window.api.downloadVideo({
+        bvid: video.bvid,
+        source,
+        qn,
+        savePath: picked.filePath,
+        jobId
+      })
+
+      if (res && res.error) setError(res.error)
+      else if (res && res.canceled) flash('已取消下载')
+      else if (res && res.ok) flash(`下载完成 ✅ ${res.filePath}`)
+    } catch (err) {
+      setError(err.message || '下载失败')
+    } finally {
+      setDlBusy(false)
+      setDlProgress(null)
+    }
+  }
+
+  // 取消进行中的下载（中断网络请求）
+  async function handleCancelDownload() {
+    if (!dlProgress || !dlProgress.jobId) return
+    try {
+      await window.api.cancelDownload(dlProgress.jobId)
+    } catch {
+      /* 忽略取消失败 */
+    }
+  }
+
   // ===== 导出 / 导入他人分享 =====
   // 导出当前分区为紧凑 JSON 分享文件
   async function handleExport() {
@@ -1056,6 +1171,21 @@ function App() {
 
       {error && <div className="error">{error}</div>}
       {notice && <div className="notice">{notice}</div>}
+
+      {/* 下载进度条（下载进行中时显示，可随时取消） */}
+      {dlProgress && (
+        <div className="dl-bar">
+          <span className="dl-bar-text">
+            ⬇ {DL_STAGE_LABEL[dlProgress.stage] || '下载中'} · {dlProgress.percent || 0}%
+          </span>
+          <span className="dl-bar-track">
+            <span className="dl-bar-fill" style={{ width: `${dlProgress.percent || 0}%` }} />
+          </span>
+          <button className="btn-ghost" onClick={handleCancelDownload}>
+            取消
+          </button>
+        </div>
+      )}
 
       {fetchResult && (
         <div className="card">
@@ -1449,6 +1579,14 @@ function App() {
                   >
                     {v.watched ? '已看' : '未看'}
                   </button>
+                  <button
+                    className="btn-ghost btn-download"
+                    onClick={() => handleDownloadClick(v)}
+                    disabled={dlBusy}
+                    title="把这个视频下载到本地（高清需登录）"
+                  >
+                    ⬇ 下载
+                  </button>
                   <button className="btn-ghost" onClick={() => startEditTags(v)}>
                     标签
                   </button>
@@ -1587,6 +1725,65 @@ function App() {
                 {importing ? '导入中…' : '开始导入'}
               </button>
               <button className="btn-ghost" onClick={() => setShowFolderPicker(false)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 清晰度选择弹窗：列表来自接口 accept_quality（账号实际可用档位） */}
+      {dlVideo && (
+        <div className="modal-overlay">
+          <div className="modal dl-modal">
+            <h3>选择清晰度</h3>
+            <p className="dl-target" title={dlVideo.title}>
+              {dlVideo.title}
+            </p>
+
+            {dlLoadingQ ? (
+              <div className="empty">正在获取可用清晰度…</div>
+            ) : dlQualities.length === 0 ? (
+              <div className="empty">没有取到可用的清晰度</div>
+            ) : (
+              <div className="dl-quality-list">
+                {dlQualities.map((q) => (
+                  <label
+                    key={q.qn}
+                    className={`dl-quality-item ${dlQuality === q.qn ? 'on' : ''} ${
+                      q.available ? '' : 'off'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="dl-quality"
+                      checked={dlQuality === q.qn}
+                      disabled={!q.available}
+                      onChange={() => setDlQuality(q.qn)}
+                    />
+                    <span className="dl-q-label">{q.label}</span>
+                    {q.qn === 80 && q.available && <span className="dl-q-tag">推荐</span>}
+                    {!q.available && <span className="dl-q-tag dl-q-tag-dim">需更高权限</span>}
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {!(loginInfo && loginInfo.loggedIn) && (
+              <p className="dl-tip">
+                未登录通常只能下载 360P / 480P，登录后可解锁 1080P 及以上。
+              </p>
+            )}
+
+            <div className="modal-actions">
+              <button
+                className="btn-primary"
+                onClick={handleConfirmDownload}
+                disabled={dlLoadingQ || dlQualities.length === 0}
+              >
+                选择保存位置并下载
+              </button>
+              <button className="btn-ghost" onClick={() => setDlVideo(null)}>
                 取消
               </button>
             </div>

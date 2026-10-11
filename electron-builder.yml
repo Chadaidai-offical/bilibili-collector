@@ -7,6 +7,13 @@
   "files": [
     "out/**/*"
   ],
+  "extraResources": [
+    {
+      "from": "resources/ffmpeg",
+      "to": "ffmpeg",
+      "filter": ["ffmpeg.exe"]
+    }
+  ],
   "win": {
     "target": "nsis"
   },

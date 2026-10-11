@@ -49,5 +49,17 @@ contextBridge.exposeInMainWorld('api', {
   // 导出 / 导入他人分享
   exportVideos: (source) => ipcRenderer.invoke('export-videos', source),
   pickShareFile: () => ipcRenderer.invoke('pick-share-file'),
-  importShareData: (payload) => ipcRenderer.invoke('import-share-data', payload)
+  importShareData: (payload) => ipcRenderer.invoke('import-share-data', payload),
+
+  // 视频下载（DASH 音视频分流 + ffmpeg 合并）
+  getVideoQualities: (bvid, source) => ipcRenderer.invoke('get-video-qualities', bvid, source),
+  pickSavePath: (defaultName) => ipcRenderer.invoke('pick-save-path', defaultName),
+  downloadVideo: (payload) => ipcRenderer.invoke('download-video', payload),
+  cancelDownload: (jobId) => ipcRenderer.invoke('cancel-download', jobId),
+  // 订阅下载进度；返回取消订阅函数
+  onDownloadProgress: (cb) => {
+    const listener = (_event, progress) => cb(progress)
+    ipcRenderer.on('download-progress', listener)
+    return () => ipcRenderer.removeListener('download-progress', listener)
+  }
 })

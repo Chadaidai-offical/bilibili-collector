@@ -7,3 +7,7 @@ out
 # 导出的收藏 / 分享文件（属于个人数据，不要提交）
 B站*.json
 *-分享-*.json
+
+# 内置 ffmpeg（体积大且超 GitHub 单文件上限，不入库；
+# 打包前请把 ffmpeg.exe 放到 resources/ffmpeg/，见该目录 README）
+resources/ffmpeg/*.exe

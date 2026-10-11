@@ -127,6 +127,11 @@ async function fetchVideoInfo(url) {
     author: owner.name || authorMeta || '',
     authorFace: owner.face || '',
     duration: (videoData && videoData.duration) || 0,
+    // cid 是播放地址接口的必需参数：公开页 __INITIAL_STATE__ 里就有（分P取首P）
+    cid:
+      (videoData &&
+        (videoData.cid || (videoData.pages && videoData.pages[0] && videoData.pages[0].cid))) ||
+      0,
     desc: (videoData && videoData.desc) || '',
     pubdate: (videoData && videoData.pubdate) || 0,
     tname: (videoData && videoData.tname) || '',
@@ -166,6 +171,7 @@ function createTableSql(name) {
       author      TEXT DEFAULT '',
       author_face TEXT DEFAULT '',
       duration    INTEGER DEFAULT 0,
+      cid         INTEGER DEFAULT 0,
       description TEXT DEFAULT '',
       pubdate     INTEGER DEFAULT 0,
       tname       TEXT DEFAULT '',
@@ -192,6 +198,7 @@ function createSharedTableSql() {
       author      TEXT DEFAULT '',
       author_face TEXT DEFAULT '',
       duration    INTEGER DEFAULT 0,
+      cid         INTEGER DEFAULT 0,
       description TEXT DEFAULT '',
       pubdate     INTEGER DEFAULT 0,
       tname       TEXT DEFAULT '',
@@ -235,6 +242,7 @@ function migrateDb() {
     ['author', "TEXT DEFAULT ''"],
     ['author_face', "TEXT DEFAULT ''"],
     ['duration', 'INTEGER DEFAULT 0'],
+    ['cid', 'INTEGER DEFAULT 0'],
     ['description', "TEXT DEFAULT ''"],
     ['pubdate', 'INTEGER DEFAULT 0'],
     ['tname', "TEXT DEFAULT ''"],
@@ -266,6 +274,7 @@ function rowToVideo(row) {
     author: row.author,
     authorFace: row.author_face || '',
     duration: row.duration || 0,
+    cid: row.cid || 0,
     desc: row.description || '',
     pubdate: row.pubdate || 0,
     tname: row.tname || '',
@@ -328,6 +337,7 @@ function addVideo(video, source = 'fav') {
     tags = [],
     authorFace = '',
     duration = 0,
+    cid = 0,
     desc = '',
     pubdate = 0,
     tname = '',
@@ -346,9 +356,9 @@ function addVideo(video, source = 'fav') {
   const info = db
     .prepare(
       `INSERT INTO ${t}
-        (bvid, url, title, cover, author, author_face, duration, description, pubdate, tname, stat, tags, fav_time)
+        (bvid, url, title, cover, author, author_face, duration, cid, description, pubdate, tname, stat, tags, fav_time)
        VALUES
-        (@bvid, @url, @title, @cover, @author, @authorFace, @duration, @description, @pubdate, @tname, @stat, @tags, @favTime)`
+        (@bvid, @url, @title, @cover, @author, @authorFace, @duration, @cid, @description, @pubdate, @tname, @stat, @tags, @favTime)`
     )
     .run({
       bvid,
@@ -358,6 +368,7 @@ function addVideo(video, source = 'fav') {
       author,
       authorFace,
       duration,
+      cid: Number(cid) || 0,
       description: desc,
       pubdate,
       tname,
@@ -1151,6 +1162,324 @@ async function checkInvalidVideos(source = 'fav', onProgress) {
   return { ok: true, total, checked, invalid: invalidIds.length, unknown }
 }
 
+// ===== 视频下载（DASH 音视频分流 + ffmpeg 合并）=====
+// 合规说明：只下载用户本人有权观看的公开视频，仅限个人自用，不绕过任何付费/地区限制。
+// 技术要点：B 站高清（1080P 起）走 DASH 格式，音视频是分离的两条 m4s 流，
+// 下载后必须用 ffmpeg -c copy 无损合并；拉 CDN 流必须带 Referer，否则 403。
+
+// DASH 清晰度档位表（接口未提供 accept_description 时的本地兜底文案）
+const QUALITY_LABELS = {
+  127: '8K 超高清',
+  126: '杜比视界',
+  125: 'HDR 真彩',
+  120: '4K 超清',
+  116: '1080P60 高帧率',
+  112: '1080P+ 高码率',
+  80: '1080P 高清',
+  74: '720P60 高帧率',
+  64: '720P 高清',
+  32: '480P 清晰',
+  16: '360P 流畅',
+  6: '240P 极速'
+}
+const DEFAULT_QN = 80 // 默认目标 1080P；账号拿不到时自动往下降档
+
+// 播放地址接口的错误码文案（与搜索接口同一套风控错误码）
+const PLAYURL_HINTS = {
+  '-404': '视频不存在或已被删除',
+  '-403': '没有权限访问该视频（可能是付费/充电专属，或需要登录）',
+  '-10403': '该视频在当前地区不可观看',
+  '-352': '触发了风控校验，请等几分钟再试，不要连续快速下载',
+  '-412': '当前 IP 已被 B 站拦截，请等一段时间或换个网络再试',
+  '-101': '未登录，请先登录 B 站'
+}
+
+// 定位 ffmpeg：优先用打包进 resources 的副本，其次退回系统 PATH
+function resolveFfmpeg() {
+  const candidates = []
+  if (process.resourcesPath) candidates.push(join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe'))
+  candidates.push(join(__dirname, '../../resources/ffmpeg/ffmpeg.exe')) // 开发态：项目 resources 目录
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {
+      /* 忽略探测失败 */
+    }
+  }
+  return 'ffmpeg' // 退回系统 PATH（开发机已安装时直接可用）
+}
+
+// 播放地址短时缓存：避免「取清晰度列表」与「开始下载」两次重复请求同一接口
+const playUrlCache = new Map()
+const PLAYURL_TTL = 2 * 60 * 1000
+
+// 取 cid：优先用库里存的，没有再请求 view 接口（分P取首P），拿到后回填数据库
+async function ensureCid(bvid, source = 'fav') {
+  const t = tableFor(source)
+  const row = db.prepare(`SELECT id, cid FROM ${t} WHERE bvid = ?`).get(bvid)
+  if (row && row.cid) return row.cid
+
+  let data
+  try {
+    const res = await biliFetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`)
+    data = await res.json()
+  } catch (err) {
+    throw new Error(`获取视频信息失败：${err.message || '网络错误'}`)
+  }
+  if (data.code !== 0) {
+    throw new Error(PLAYURL_HINTS[String(data.code)] || data.message || '获取视频信息失败')
+  }
+  const d = data.data || {}
+  const cid = Number(d.cid || (d.pages && d.pages[0] && d.pages[0].cid)) || 0
+  if (!cid) throw new Error('未能取到视频 cid')
+  if (row) db.prepare(`UPDATE ${t} SET cid = ? WHERE bvid = ?`).run(cid, bvid)
+  return cid
+}
+
+// 请求播放地址（DASH）。qn=127 一次性拿回账号可用的全部清晰度档位，后续按用户所选往下筛。
+async function fetchDash(bvid, source = 'fav') {
+  const hit = playUrlCache.get(bvid)
+  if (hit && Date.now() - hit.at < PLAYURL_TTL) return hit.payload
+
+  const cid = await ensureCid(bvid, source)
+
+  let mixinKey
+  try {
+    mixinKey = await getWbiMixinKey()
+  } catch (err) {
+    return { error: err.message || '签名准备失败' }
+  }
+
+  const query = signWbi({ bvid, cid, qn: 127, fnval: 4048, fnver: 0, fourk: 1 }, mixinKey)
+
+  let data
+  try {
+    const res = await biliFetch(`https://api.bilibili.com/x/player/wbi/playurl?${query}`)
+    data = await res.json()
+  } catch (err) {
+    return { error: `请求播放地址失败：${err.message || '网络错误'}` }
+  }
+
+  if (data.code !== 0) {
+    return {
+      error: PLAYURL_HINTS[String(data.code)] || data.message || '获取播放地址失败',
+      code: data.code
+    }
+  }
+
+  const d = data.data || {}
+  if (!d.dash) {
+    return { error: '未取到 DASH 流。高清下载需要登录态，请先登录 B 站后重试' }
+  }
+
+  const payload = {
+    ok: true,
+    cid,
+    duration: d.dash.duration || 0,
+    accepts: (d.accept_quality || []).map((q, i) => ({
+      qn: q,
+      label: (d.accept_description && d.accept_description[i]) || QUALITY_LABELS[q] || `清晰度 ${q}`
+    })),
+    video: d.dash.video || [],
+    audio: d.dash.audio || []
+  }
+  playUrlCache.set(bvid, { at: Date.now(), payload })
+  return payload
+}
+
+// 从一组流里挑清晰度不超过 maxQn 的最高档（同档位取码率最高的那条）
+function pickStream(list, maxQn) {
+  const avail = (list || []).filter((s) => s && (s.baseUrl || s.base_url))
+  if (avail.length === 0) return null
+  let best = null
+  for (const s of avail) {
+    if (Number(s.id) > maxQn) continue
+    const better =
+      !best ||
+      Number(s.id) > Number(best.id) ||
+      (Number(s.id) === Number(best.id) && Number(s.bandwidth || 0) > Number(best.bandwidth || 0))
+    if (better) best = s
+  }
+  // 兜底：若所有流都超过上限（理论上不会），退回最低档
+  if (!best) best = avail.reduce((a, b) => (Number(a.id) <= Number(b.id) ? a : b))
+  return best
+}
+
+// 取一条流的候选地址（主地址 + 备用镜像），下载失败时依次重试
+function streamUrls(stream) {
+  const main = stream.baseUrl || stream.base_url || ''
+  const backups = stream.backupUrl || stream.backup_url || []
+  return [main, ...backups].filter(Boolean)
+}
+
+// 流式下载单个地址到本地文件，边写边回报进度。带 Referer 过防盗链。
+async function downloadStream(urls, dest, onProgress, signal) {
+  let lastErr = null
+  for (const url of urls) {
+    try {
+      const res = await net.fetch(url, {
+        headers: { 'User-Agent': BILI_UA, Referer: 'https://www.bilibili.com/' },
+        signal
+      })
+      if (!res.ok) {
+        lastErr = new Error(`HTTP ${res.status}`)
+        continue
+      }
+      const total = Number(res.headers.get('content-length')) || 0
+      const out = fs.createWriteStream(dest)
+      let received = 0
+      const reader = res.body.getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received += value.length
+        if (!out.write(Buffer.from(value))) {
+          await new Promise((resolve) => out.once('drain', resolve))
+        }
+        if (typeof onProgress === 'function') onProgress(received, total)
+      }
+      await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())))
+      return { ok: true, bytes: received }
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw err
+      lastErr = err
+    }
+  }
+  throw lastErr || new Error('下载失败')
+}
+
+// 用 ffmpeg 把分离的音视频流合并为 mp4。-c copy = 流拷贝，不重编码、无损、秒级完成。
+function mergeWithFfmpeg(videoPath, audioPath, outPath) {
+  const ffmpeg = resolveFfmpeg()
+  const args = [
+    '-y',
+    '-i',
+    videoPath,
+    '-i',
+    audioPath,
+    '-c',
+    'copy',
+    '-movflags',
+    '+faststart',
+    outPath
+  ]
+  const r = spawnSync(ffmpeg, args, { windowsHide: true, encoding: 'utf8' })
+  if (r.error) throw new Error(`未找到 ffmpeg，无法合并音视频：${r.error.message}`)
+  if (r.status !== 0) {
+    const tail = String(r.stderr || '')
+      .trim()
+      .split('\n')
+      .slice(-2)
+      .join(' ')
+    throw new Error(`ffmpeg 合并失败：${tail || `退出码 ${r.status}`}`)
+  }
+  if (!fs.existsSync(outPath)) throw new Error('ffmpeg 未生成输出文件')
+  return { ok: true }
+}
+
+// 文件名清洗：去掉 Windows 不允许的字符，保留 BV 号便于溯源
+function safeFileName(title, bvid) {
+  const cleaned = String(title || '')
+    .replace(/[\\/:*?"<>|\r\n\t]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+  return `${cleaned || 'video'}-${bvid}.mp4`
+}
+
+// 读取某视频可用的清晰度列表（供前端渲染选择弹窗）
+async function getVideoQualities(bvid, source = 'fav') {
+  if (!bvid) return { error: '缺少 BV 号' }
+  const dash = await fetchDash(bvid, source)
+  if (dash.error) return dash
+  const have = new Set((dash.video || []).map((s) => Number(s.id)))
+  return {
+    ok: true,
+    cid: dash.cid,
+    duration: dash.duration,
+    defaultQn: DEFAULT_QN,
+    qualities: dash.accepts.map((a) => ({
+      qn: a.qn,
+      label: a.label,
+      available: have.has(Number(a.qn))
+    }))
+  }
+}
+
+// 下载单个视频：cid → playurl → 选流 → 下载两条 m4s → ffmpeg 合并 → 落盘
+async function downloadVideo(bvid, opts = {}, onProgress, signal) {
+  const { source = 'fav', qn = DEFAULT_QN, savePath } = opts
+  if (!bvid) return { error: '缺少 BV 号' }
+  if (!savePath) return { error: '未指定保存位置' }
+
+  const dash = await fetchDash(bvid, source)
+  if (dash.error) return dash
+
+  const vStream = pickStream(dash.video, Number(qn) || DEFAULT_QN)
+  const aStream = pickStream(dash.audio, 999999) // 音频一律取最高码率
+  if (!vStream) return { error: '没有可用的视频流' }
+  if (!aStream) return { error: '没有可用的音频流' }
+
+  const tmpDir = fs.mkdtempSync(join(app.getPath('temp'), 'bili-dl-'))
+  const vFile = join(tmpDir, 'video.m4s')
+  const aFile = join(tmpDir, 'audio.m4s')
+  const report = (stage, percent, extra) => {
+    if (typeof onProgress === 'function') onProgress({ stage, percent, ...extra })
+  }
+
+  try {
+    report('video', 0)
+    await downloadStream(
+      streamUrls(vStream),
+      vFile,
+      (received, total) => {
+        report('video', total ? Math.min(99, Math.round((received / total) * 100)) : 0, {
+          received,
+          total
+        })
+      },
+      signal
+    )
+
+    report('audio', 0)
+    await downloadStream(
+      streamUrls(aStream),
+      aFile,
+      (received, total) => {
+        report('audio', total ? Math.min(99, Math.round((received / total) * 100)) : 0, {
+          received,
+          total
+        })
+      },
+      signal
+    )
+
+    report('merging', 100)
+    mergeWithFfmpeg(vFile, aFile, savePath)
+    report('done', 100)
+
+    return { ok: true, filePath: savePath, quality: Number(vStream.id) }
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    } catch {
+      /* 忽略清理失败 */
+    }
+  }
+}
+
+// 弹保存对话框返回目标路径（前端在下载前调用，用户取消则中止流程）
+async function pickSavePath(defaultName) {
+  const parent = BrowserWindow.getAllWindows()[0]
+  const { canceled, filePath } = await dialog.showSaveDialog(parent || undefined, {
+    title: '保存视频到',
+    defaultPath: defaultName || 'video.mp4',
+    filters: [{ name: 'MP4 视频', extensions: ['mp4'] }]
+  })
+  if (canceled || !filePath) return { canceled: true }
+  return { ok: true, filePath }
+}
+
 // ===== 打开 B 站客户端 =====
 // 客户端注册的自定义协议名为 `bilipc`，注册表命令形如 "D:\bilibili\哔哩哔哩.exe" "%1"。
 // 这里直接读注册表拿到 exe 真实路径并启动它，绕开协议深链的不确定性。
@@ -1394,6 +1723,7 @@ async function importFavorites(mediaId) {
         author: (m.upper && m.upper.name) || '',
         authorFace: (m.upper && m.upper.face) || '',
         duration: m.duration || 0,
+        cid: m.cid || 0,
         desc: m.intro || '',
         pubdate: m.pubtime || 0,
         tname: '',
@@ -1417,6 +1747,10 @@ async function importFavorites(mediaId) {
         // 已存在：刷新为 B 站真实收藏时间（旧数据 fav_time 为 0，重新导入一次即可修正排序）
         if (m.fav_time && r.video.favTime !== m.fav_time) {
           db.prepare('UPDATE videos SET fav_time = ? WHERE id = ?').run(m.fav_time, r.video.id)
+        }
+        // 旧数据没存 cid，重新导入时顺手补上（下载功能需要）
+        if (m.cid && !r.video.cid) {
+          db.prepare('UPDATE videos SET cid = ? WHERE id = ?').run(m.cid, r.video.id)
         }
       } else added++
       total++
@@ -1465,6 +1799,7 @@ async function importWatchLater() {
       author: (m.owner && m.owner.name) || '',
       authorFace: (m.owner && m.owner.face) || '',
       duration: m.duration || 0,
+      cid: m.cid || 0,
       desc: m.desc || '',
       pubdate: m.pubdate || 0,
       tname: m.tname || '',
@@ -1487,6 +1822,9 @@ async function importWatchLater() {
       skipped++
       if (m.add_at && r.video.favTime !== m.add_at) {
         db.prepare('UPDATE toview SET fav_time = ? WHERE id = ?').run(m.add_at, r.video.id)
+      }
+      if (m.cid && !r.video.cid) {
+        db.prepare('UPDATE toview SET cid = ? WHERE id = ?').run(m.cid, r.video.id)
       }
     } else added++
     total++
@@ -1572,6 +1910,59 @@ ipcMain.handle('check-invalid', async (event, source) => {
   }
 })
 
+// ===== 视频下载 IPC =====
+// 每个下载任务配一个 AbortController，支持中途取消
+const downloadJobs = new Map()
+
+ipcMain.handle('get-video-qualities', async (_event, bvid, source) => {
+  try {
+    return await getVideoQualities(bvid, source)
+  } catch (err) {
+    return { error: err.message || '获取清晰度失败' }
+  }
+})
+
+ipcMain.handle('pick-save-path', async (_event, defaultName) => {
+  try {
+    return await pickSavePath(defaultName)
+  } catch (err) {
+    return { error: err.message || '选择保存位置失败' }
+  }
+})
+
+// 开始下载；过程中通过 'download-progress' 事件回报 { jobId, stage, percent, ... }
+ipcMain.handle('download-video', async (event, payload) => {
+  const { bvid, source, qn, savePath, jobId } = payload || {}
+  const controller = new AbortController()
+  if (jobId) downloadJobs.set(jobId, controller)
+  try {
+    return await downloadVideo(
+      bvid,
+      { source, qn, savePath },
+      (p) => {
+        if (jobId && !event.sender.isDestroyed()) {
+          event.sender.send('download-progress', { jobId, ...p })
+        }
+      },
+      controller.signal
+    )
+  } catch (err) {
+    if (err && err.name === 'AbortError') return { canceled: true }
+    return { error: err.message || '下载失败' }
+  } finally {
+    if (jobId) downloadJobs.delete(jobId)
+  }
+})
+
+ipcMain.handle('cancel-download', (_event, jobId) => {
+  const c = downloadJobs.get(jobId)
+  if (c) {
+    c.abort()
+    return { ok: true }
+  }
+  return { ok: false }
+})
+
 // 打开 B 站客户端（没装则退回网页）
 ipcMain.handle('open-bilibili', () => openBilibiliApp())
 
@@ -1654,5 +2045,7 @@ module.exports = {
   parseDurationText,
   compareVersion,
   importSearchItems,
-  extractWbiKey
+  extractWbiKey,
+  pickStream,
+  safeFileName
 }
