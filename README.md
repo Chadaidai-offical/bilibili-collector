@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.1.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.1.0/Bilibili-Collector-Setup-1.1.0.exe)** —— Windows 10/11 (x64)，约 84 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.2.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.2.0/Bilibili-Collector-Setup-1.2.0.exe)** —— Windows 10/11 (x64)，约 84 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -129,7 +129,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.1.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.1.0/Bilibili-Collector-Setup-1.1.0.exe) | 约 84 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.2.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.2.0/Bilibili-Collector-Setup-1.2.0.exe) | 约 84 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -317,6 +317,7 @@ bilibili-collector/
 - **检查更新（三通道降级）**：启动自动检查（带 30 分钟缓存，手动检查会绕过缓存），依次尝试 ① GitHub Releases API（带 `ETag`，304 不计配额）→ ② 仓库 `package.json`（raw.githubusercontent，不耗配额）→ ③ jsDelivr CDN 版本列表；某个通道失败自动降级到下一个，全部失败时给中性提示条 + 「前往下载页」兜底按钮，**不影响任何其它功能**
 - **修复「检查更新」报 403 的体验问题**：403 通常不是软件故障，而是 GitHub 匿名接口按**出口 IP 每小时 60 次**限流、共享代理 IP 额度被用光。现在失败会自动降级并在界面上说清原因（详见下方「注意事项」第 8 条）
 - **仓库卫生**：`.gitignore` 增加忽略导出的 `B站*.json` / `*-分享-*.json`，避免把个人收藏数据误提交进仓库
+- **提供安装包**：发布 Windows x64 的 NSIS 安装包（约 84 MB），可直接下载安装，无需配置任何环境
 
 ### v1.1.0（2026-10-11）
 
