@@ -1,6 +1,6 @@
 {
   "name": "bilibili-collector",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "本地 B 站视频收藏管理器",
   "main": "./out/main/index.js",
   "author": "茶呆呆",

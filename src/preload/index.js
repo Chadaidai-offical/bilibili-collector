@@ -5,20 +5,40 @@ contextBridge.exposeInMainWorld('api', {
   // 抓取 B 站视频公开元信息
   fetchVideoInfo: (url) => ipcRenderer.invoke('fetch-video-info', url),
 
-  // 本地收藏存储
-  saveVideo: (video) => ipcRenderer.invoke('save-video', video),
-  listVideos: () => ipcRenderer.invoke('list-videos'),
-  searchVideos: (keyword) => ipcRenderer.invoke('search-videos', keyword),
-  updateVideo: (id, fields) => ipcRenderer.invoke('update-video', id, fields),
-  deleteVideo: (id) => ipcRenderer.invoke('delete-video', id),
+  // 本地存储（source: 'fav' 收藏 / 'toview' 稍后再看）
+  saveVideo: (video, source) => ipcRenderer.invoke('save-video', video, source),
+  listVideos: (source) => ipcRenderer.invoke('list-videos', source),
+  searchVideos: (keyword, source) => ipcRenderer.invoke('search-videos', keyword, source),
+  updateVideo: (id, fields, source) => ipcRenderer.invoke('update-video', id, fields, source),
+  deleteVideo: (id, source) => ipcRenderer.invoke('delete-video', id, source),
+  batchAddTags: (ids, tags, source) => ipcRenderer.invoke('batch-add-tags', ids, tags, source),
+  batchDeleteVideos: (ids, source) => ipcRenderer.invoke('batch-delete-videos', ids, source),
+
+  // 标签管理（分区级重命名 / 合并 / 删除）与统计面板
+  listTagStats: (source) => ipcRenderer.invoke('list-tag-stats', source),
+  editTags: (fromTags, toTag, source) => ipcRenderer.invoke('edit-tags', fromTags, toTag, source),
+  getStats: (source) => ipcRenderer.invoke('get-stats', source),
+  checkInvalidVideos: (source) => ipcRenderer.invoke('check-invalid', source),
+  // 订阅检测进度；返回取消订阅函数
+  onCheckInvalidProgress: (cb) => {
+    const listener = (_event, progress) => cb(progress)
+    ipcRenderer.on('check-invalid-progress', listener)
+    return () => ipcRenderer.removeListener('check-invalid-progress', listener)
+  },
 
   // 打开 B 站客户端（没装则退回网页）
   openBilibiliApp: () => ipcRenderer.invoke('open-bilibili'),
 
-  // B 站登录 + 收藏夹导入
+  // B 站登录 + 收藏夹 / 稍后再看导入
   checkLogin: () => ipcRenderer.invoke('check-login'),
   openLogin: () => ipcRenderer.invoke('open-login'),
   logout: () => ipcRenderer.invoke('logout'),
   listFavFolders: () => ipcRenderer.invoke('list-fav-folders'),
-  importFavorites: (mediaId) => ipcRenderer.invoke('import-favorites', mediaId)
+  importFavorites: (mediaId) => ipcRenderer.invoke('import-favorites', mediaId),
+  importWatchLater: () => ipcRenderer.invoke('import-watch-later'),
+
+  // 导出 / 导入他人分享
+  exportVideos: (source) => ipcRenderer.invoke('export-videos', source),
+  pickShareFile: () => ipcRenderer.invoke('pick-share-file'),
+  importShareData: (payload) => ipcRenderer.invoke('import-share-data', payload)
 })
