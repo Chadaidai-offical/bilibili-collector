@@ -96,6 +96,18 @@ function App() {
   const [shareFrom, setShareFrom] = useState(null)
   const [dragging, setDragging] = useState(false)
 
+  // 检查更新
+  const [updateInfo, setUpdateInfo] = useState(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  // 检查失败时的提示条（例如 GitHub 匿名接口配额耗尽），仍给「前往下载页」兜底
+  const [updateTip, setUpdateTip] = useState(null)
+
+  // 全站搜索：结果先预览（不入库），勾选后再写入「搜索列表」分区
+  const [searchKw, setSearchKw] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [searchResults, setSearchResults] = useState([])
+  const [picked, setPicked] = useState([])
+
   // 排序方式（前端排序，作用于当前筛选结果）
   const [sortBy, setSortBy] = useState('favTimeDesc')
 
@@ -155,6 +167,19 @@ function App() {
     }
   }, [])
 
+  // 启动后延迟 3 秒静默检查更新（不阻塞启动；只有真有新版本才提示）
+  useEffect(() => {
+    const t = setTimeout(() => {
+      window.api
+        .checkUpdate()
+        .then((info) => {
+          if (info && info.ok && info.hasUpdate) setUpdateInfo(info)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [])
+
   // 整窗拖拽导入：把 .json 分享文件拖进来松手即导入到「分享导入」分区
   useEffect(() => {
     let depth = 0
@@ -208,6 +233,9 @@ function App() {
     setShowTagManager(false)
     setSelectedTags([])
     setRenameTo('')
+    setSearchResults([])
+    setPicked([])
+    setSearchKw('')
     setError('')
     setSource(next)
   }
@@ -311,6 +339,99 @@ function App() {
       flash('已退出登录')
     } catch (err) {
       setError(err.message || '退出失败')
+    }
+  }
+
+  // 手动检查更新
+  async function handleCheckUpdate() {
+    setCheckingUpdate(true)
+    setError('')
+    setUpdateTip(null)
+    try {
+      const info = await window.api.checkUpdate(true)
+      if (!info || !info.ok) {
+        // 失败不弹错误，改用提示条 + 「前往下载页」兜底，避免用户被卡住
+        setUpdateTip({
+          text:
+            (info && info.error) ||
+            `检查更新失败（当前版本 v${(info && info.current) || '—'}），可手动前往下载页查看`,
+          url: (info && info.url) || 'https://github.com/Chadaidai-offical/bilibili-collector/releases'
+        })
+        return
+      }
+      if (info.hasUpdate) {
+        setUpdateInfo(info)
+      } else {
+        setUpdateInfo(null)
+        flash(
+          info.fellBack
+            ? `当前已是最新版本 v${info.current}（GitHub 接口繁忙，已走备用通道核对）`
+            : `当前已是最新版本 v${info.current}`
+        )
+      }
+    } catch (err) {
+      setUpdateTip({
+        text: err.message || '检查更新失败',
+        url: 'https://github.com/Chadaidai-offical/bilibili-collector/releases'
+      })
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
+  // 搜索 B 站全站视频：只发一次请求（第一页 20 条），结果先预览、不入库
+  async function handleSearchBili() {
+    const kw = searchKw.trim()
+    if (!kw) {
+      setError('请输入要搜索的关键词')
+      return
+    }
+    setSearching(true)
+    setError('')
+    try {
+      const res = await window.api.searchBili(kw)
+      if (!res || res.error) {
+        setError((res && res.error) || '搜索失败')
+        setSearchResults([])
+        setPicked([])
+        return
+      }
+      const items = Array.isArray(res.items) ? res.items : []
+      setSearchResults(items)
+      setPicked([])
+      if (items.length === 0) flash('没有搜到相关视频，换个关键词试试')
+    } catch (err) {
+      setError(err.message || '搜索失败')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function togglePick(bvid) {
+    setPicked((prev) => (prev.includes(bvid) ? prev.filter((x) => x !== bvid) : [...prev, bvid]))
+  }
+
+  function togglePickAll() {
+    setPicked((prev) =>
+      prev.length === searchResults.length ? [] : searchResults.map((v) => v.bvid)
+    )
+  }
+
+  // 把勾选的搜索结果写入「搜索列表」分区（按 bvid 去重）
+  async function handleAddPicked() {
+    if (picked.length === 0) return
+    const items = searchResults.filter((v) => picked.includes(v.bvid))
+    try {
+      const res = await window.api.importSearchItems(items)
+      if (res && res.error) {
+        setError(res.error)
+        return
+      }
+      flash(`已加入搜索列表：新增 ${res.added} 条，已存在跳过 ${res.skipped} 条`)
+      setPicked([])
+      if (source === 'search') refresh(keyword, 'search')
+    } catch (err) {
+      setError(err.message || '加入失败')
     }
   }
 
@@ -696,7 +817,14 @@ function App() {
   }
 
   // 分区文案
-  const sourceLabel = source === 'fav' ? '收藏' : source === 'toview' ? '稍后再看' : '分享内容'
+  const sourceLabel =
+    source === 'fav'
+      ? '收藏'
+      : source === 'toview'
+        ? '稍后再看'
+        : source === 'shared'
+          ? '分享内容'
+          : '搜索列表'
 
   return (
     <div className="app">
@@ -750,6 +878,14 @@ function App() {
                 退出
               </button>
             )}
+            <button
+              className="btn-open-client"
+              onClick={handleCheckUpdate}
+              disabled={checkingUpdate}
+              title="检查是否有新版本"
+            >
+              {checkingUpdate ? '检查中…' : '检查更新'}
+            </button>
             <button className="btn-open-client" onClick={handleOpenBilibili}>
               打开B站客户端
             </button>
@@ -758,12 +894,48 @@ function App() {
         <p className="subtitle">粘贴 B 站视频链接，抓取公开信息并存入本地</p>
       </header>
 
-      {/* 分区切换：收藏 / 稍后再看 */}
+      {/* 有新版本时在顶部提示，点一下就能去下载 */}
+      {updateInfo && updateInfo.hasUpdate && (
+        <div className="update-bar">
+          <span className="update-text">
+            发现新版本 <b>v{updateInfo.latest}</b>（当前 v{updateInfo.current}）
+            {updateInfo.fellBack && <span className="update-sub"> · 备用通道</span>}
+          </span>
+          <button
+            className="btn-primary update-btn"
+            onClick={() => window.api.openExternal(updateInfo.url)}
+          >
+            前往下载
+          </button>
+          <button className="btn-ghost" onClick={() => setUpdateInfo(null)}>
+            忽略
+          </button>
+        </div>
+      )}
+
+      {/* 检查更新失败（如 GitHub 针对匿名接口的 IP 配额耗尽）时的提示条 */}
+      {updateTip && (
+        <div className="update-bar update-bar-warn">
+          <span className="update-text">{updateTip.text}</span>
+          <button
+            className="btn-ghost update-btn"
+            onClick={() => window.api.openExternal(updateTip.url)}
+          >
+            前往下载页
+          </button>
+          <button className="btn-ghost" onClick={() => setUpdateTip(null)}>
+            知道了
+          </button>
+        </div>
+      )}
+
+      {/* 分区切换：收藏 / 稍后再看 / 分享导入 / 搜索列表 */}
       <div className="source-tabs">
         {[
           { key: 'fav', label: '我的收藏' },
           { key: 'toview', label: '稍后再看' },
-          { key: 'shared', label: '分享导入' }
+          { key: 'shared', label: '分享导入' },
+          { key: 'search', label: '搜索列表' }
         ].map((tab) => (
           <button
             key={tab.key}
@@ -784,7 +956,7 @@ function App() {
         <div className="stat-hero-divider" />
         <div className="stat-hero-item">
           <div className="stat-hero-num">{formatTotalDuration(stats.totalDuration)}</div>
-          <div className="stat-hero-label">收藏总时长</div>
+          <div className="stat-hero-label">{source === 'fav' ? '收藏总时长' : '总时长'}</div>
         </div>
         <div className="stat-hero-divider" />
         <div className="stat-hero-item">
@@ -932,11 +1104,97 @@ function App() {
         </div>
       )}
 
+      {/* 全站搜索面板（仅「搜索列表」分区显示）：结果先预览，勾选后才入库 */}
+      {source === 'search' && (
+        <div className="bili-search">
+          <div className="bili-search-head">
+            <input
+              type="text"
+              className="bili-search-input"
+              placeholder="搜索 B 站全站视频…"
+              value={searchKw}
+              onChange={(e) => setSearchKw(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearchBili()
+              }}
+            />
+            <button
+              className="btn-primary"
+              onClick={handleSearchBili}
+              disabled={searching || !(loginInfo && loginInfo.loggedIn)}
+            >
+              {searching ? '搜索中…' : '搜索'}
+            </button>
+            {searchResults.length > 0 && (
+              <>
+                <button className="btn-ghost" onClick={togglePickAll}>
+                  {picked.length === searchResults.length ? '取消全选' : '全选'}
+                </button>
+                <button
+                  className="btn-primary"
+                  onClick={handleAddPicked}
+                  disabled={picked.length === 0}
+                >
+                  加入搜索列表（{picked.length}）
+                </button>
+              </>
+            )}
+          </div>
+
+          {!(loginInfo && loginInfo.loggedIn) ? (
+            <p className="bili-search-tip warn">
+              全站搜索需要登录 B 站（带登录态的请求风控权重更低，更不容易被拦）。
+              <button className="link-btn" onClick={handleLogin}>
+                点这里登录
+              </button>
+            </p>
+          ) : (
+            <p className="bili-search-tip">
+              每次搜索只请求一次（第一页 20 条）。请勿连续快速搜索，以免触发 B 站风控。
+            </p>
+          )}
+
+          {searchResults.length > 0 && (
+            <ul className="bili-search-list">
+              {searchResults.map((v) => {
+                const on = picked.includes(v.bvid)
+                return (
+                  <li key={v.bvid} className={`bili-search-item ${on ? 'on' : ''}`}>
+                    <input
+                      type="checkbox"
+                      className="pick-box"
+                      checked={on}
+                      onChange={() => togglePick(v.bvid)}
+                    />
+                    {v.cover && <img src={v.cover} alt="" className="bili-search-cover" />}
+                    <div className="bili-search-meta">
+                      <div className="bili-search-title">{v.title}</div>
+                      <div className="bili-search-sub">
+                        {v.author}
+                        {v.duration ? ` · ${formatDuration(v.duration)}` : ''}
+                        {v.stat && v.stat.view ? ` · ${formatCount(v.stat.view)} 播放` : ''}
+                        {v.tname ? ` · ${v.tname}` : ''}
+                      </div>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+
       <div className="section">
         <div className="section-head">
           <h2>
-            {source === 'fav' ? '我的收藏' : source === 'toview' ? '稍后再看' : '分享导入'}（
-            {filteredVideos.length}）
+            {source === 'fav'
+              ? '我的收藏'
+              : source === 'toview'
+                ? '稍后再看'
+                : source === 'shared'
+                  ? '分享导入'
+                  : '搜索列表'}
+            （{filteredVideos.length}）
           </h2>
           <div className="section-head-right">
             <select
@@ -1105,7 +1363,9 @@ function App() {
               ? '还没有收藏，先去上面抓一个，或点右上角「导入收藏夹」～'
               : source === 'toview'
                 ? '稍后再看还是空的，点右上角「拉取稍后再看」试试～'
-                : '还没有导入别人的分享——点右上角「导入分享文件」，或直接把 .json 文件拖进来～'}
+                : source === 'shared'
+                  ? '还没有导入别人的分享——点右上角「导入分享文件」，或直接把 .json 文件拖进来～'
+                  : '搜索列表还是空的——在上面搜关键词，勾选想要的视频后点「加入搜索列表」～'}
           </div>
         ) : filteredVideos.length === 0 ? (
           <div className="empty">

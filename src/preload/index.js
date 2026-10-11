@@ -26,6 +26,15 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('check-invalid-progress', listener)
   },
 
+  // 全站搜索（B站 wbi 签名，需登录）+ 勾选结果入库
+  searchBili: (keyword) => ipcRenderer.invoke('search-bili', keyword),
+  importSearchItems: (items) => ipcRenderer.invoke('import-search-items', items),
+
+  // 检查更新 + 打开外部链接（下载页）
+  // manual=true 表示用户手动点击（跳过缓存立即检查）；不传则为启动静默检查（走缓存）
+  checkUpdate: (manual) => ipcRenderer.invoke('check-update', manual),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
   // 打开 B 站客户端（没装则退回网页）
   openBilibiliApp: () => ipcRenderer.invoke('open-bilibili'),
 

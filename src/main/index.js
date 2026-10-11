@@ -1,6 +1,7 @@
 const { app, shell, session, net, BrowserWindow, ipcMain, dialog } = require('electron')
 const { join, basename } = require('path')
 const { spawnSync } = require('child_process')
+const crypto = require('crypto')
 const fs = require('fs')
 const Database = require('better-sqlite3')
 
@@ -146,9 +147,9 @@ async function fetchVideoInfo(url) {
 
 let db = null
 
-// 数据分区：收藏(videos) / 稍后再看(toview) / 别人分享导入(shared) 三张表，互不干扰。
-// 用白名单把 source 映射到真实表名，避免拼接注入。
-const SOURCE_TABLES = { fav: 'videos', toview: 'toview', shared: 'shared' }
+// 数据分区：收藏(videos) / 稍后再看(toview) / 别人分享导入(shared) / 全站搜索(search)
+// 四张结构相同的表，互不干扰。用白名单把 source 映射到真实表名，避免拼接注入。
+const SOURCE_TABLES = { fav: 'videos', toview: 'toview', shared: 'shared', search: 'search' }
 function tableFor(source) {
   return SOURCE_TABLES[source] || 'videos'
 }
@@ -219,6 +220,7 @@ function initDb() {
   db.exec(createTableSql('videos')) // 收藏
   db.exec(createTableSql('toview')) // 稍后再看
   db.exec(createSharedTableSql()) // 分享导入
+  db.exec(createTableSql('search')) // 全站搜索
 
   // 旧库迁移：补齐新增列（PRAGMA table_info 检测，缺哪列补哪列）
   migrateDb()
@@ -242,7 +244,7 @@ function migrateDb() {
     ['fav_time', 'INTEGER DEFAULT 0'],
     ['invalid', 'INTEGER DEFAULT 0']
   ]
-  for (const table of ['videos', 'toview', 'shared']) {
+  for (const table of ['videos', 'toview', 'shared', 'search']) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name)
     for (const [name, def] of addCols) {
       if (!cols.includes(name)) {
@@ -481,6 +483,346 @@ function countVideos(source = 'fav') {
   const t = tableFor(source)
   const row = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()
   return row.n
+}
+
+// ===== 全站搜索（B 站 wbi 签名）=====
+// B 站的搜索接口属于「需要 wbi 签名」的接口：请求要附带按当日密钥算出的 w_rid 与 wts。
+// 密钥每天轮换，这里从 nav 接口取一次并缓存 4 小时。
+// 合规说明：用登录态搜自己的关键词、单次只取第一页，不做批量翻页爬取。
+
+// 官方前端逆向出的固定混淆表（64 位）
+const MIXIN_KEY_ENC_TAB = [
+  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
+  28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
+  54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52
+]
+
+// 64 位原始密钥按混淆表重排后取前 32 位，得到 mixin_key
+function getMixinKey(raw) {
+  return MIXIN_KEY_ENC_TAB.map((n) => raw[n]).join('').slice(0, 32)
+}
+
+// nav 接口返回的 img_url / sub_url 是伪装成 PNG 的密钥，取文件名并去掉扩展名
+function extractWbiKey(url) {
+  const name = String(url || '').split('/').pop() || ''
+  return name.split('.')[0]
+}
+
+let wbiCache = { mixinKey: '', at: 0 }
+const WBI_TTL = 4 * 60 * 60 * 1000 // 4 小时（密钥每日轮换，4 小时刷新足够安全）
+
+async function getWbiMixinKey() {
+  if (wbiCache.mixinKey && Date.now() - wbiCache.at < WBI_TTL) return wbiCache.mixinKey
+  const res = await biliFetch('https://api.bilibili.com/x/web-interface/nav')
+  const data = await res.json()
+  const imgKey = extractWbiKey(data && data.data && data.data.wbi_img && data.data.wbi_img.img_url)
+  const subKey = extractWbiKey(data && data.data && data.data.wbi_img && data.data.wbi_img.sub_url)
+  if (!imgKey || !subKey) throw new Error('获取签名密钥失败，请重新登录后再试')
+  const mixinKey = getMixinKey(imgKey + subKey)
+  wbiCache = { mixinKey, at: Date.now() }
+  return mixinKey
+}
+
+// 按 wbi 规则拼接查询串并计算 w_rid。
+// 编码细节错一条签名就废：十六进制大写、空格用 %20、值里的 !'()* 四个字符要过滤掉。
+function signWbi(params, mixinKey, wts) {
+  const encode = (v) => encodeURIComponent(String(v).replace(/[!'()*]/g, ''))
+  // wts 可显式传入（便于用官方测试向量做断言），不传则取当前时间戳
+  const p = { ...params, wts: Number(wts) || Math.floor(Date.now() / 1000) }
+  const base = Object.keys(p)
+    .sort()
+    .map((k) => `${encode(k)}=${encode(p[k])}`)
+    .join('&')
+  const wRid = crypto.createHash('md5').update(base + mixinKey).digest('hex')
+  // 与官方前端实现一致：w_rid 追加在 query 末尾，不参与上面的字典序排序
+  return `${base}&w_rid=${wRid}`
+}
+
+// 搜索结果里的标题带 <em class="keyword"> 高亮标签，需要清洗成纯文本
+function stripHtml(str) {
+  return decodeHtml(String(str || '').replace(/<[^>]*>/g, ''))
+}
+
+// 搜索接口返回的封面是协议相对地址（//i0.hdslb.com/...），补上协议头
+function normalizePic(pic) {
+  const s = String(pic || '')
+  if (!s) return ''
+  return s.startsWith('//') ? `https:${s}` : s
+}
+
+// 时长字符串 "12:34" / "1:02:03" → 秒数
+function parseDurationText(text) {
+  const parts = String(text || '')
+    .split(':')
+    .map((x) => parseInt(x, 10))
+  if (parts.length === 0 || parts.some((n) => Number.isNaN(n))) return 0
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  if (parts.length === 2) return parts[0] * 60 + parts[1]
+  return parts[0]
+}
+
+// 按关键词搜 B 站全站视频（只拉第一页 20 条，必须登录）
+async function searchBili(keyword) {
+  const kw = String(keyword || '').trim()
+  if (!kw) return { error: '请输入搜索关键词' }
+
+  // 必须登录：带登录态的请求风控权重更低，也避免匿名流量被判为脚本
+  try {
+    const cookies = await session.defaultSession.cookies.get({ url: 'https://bilibili.com' })
+    if (!cookies.some((c) => c.name === 'SESSDATA')) {
+      return { error: '请先登录 B 站后再搜索', needLogin: true }
+    }
+  } catch {
+    return { error: '请先登录 B 站后再搜索', needLogin: true }
+  }
+
+  let mixinKey
+  try {
+    mixinKey = await getWbiMixinKey()
+  } catch (err) {
+    return { error: err.message || '签名准备失败' }
+  }
+
+  const query = signWbi({ search_type: 'video', keyword: kw, page: 1, page_size: 20 }, mixinKey)
+
+  let data
+  try {
+    const res = await biliFetch(
+      `https://api.bilibili.com/x/web-interface/wbi/search/type?${query}`
+    )
+    data = await res.json()
+  } catch (err) {
+    return { error: `网络请求失败：${err.message || '未知错误'}` }
+  }
+
+  if (data.code !== 0) {
+    // 风控类错误给出明确指引，避免用户反复重试把 IP 拖进 -412（IP 级封锁更麻烦）
+    const HINTS = {
+      '-352': '触发了风控校验，请等几分钟再搜，不要连续快速搜索',
+      '-412': '当前 IP 已被 B 站拦截，请等一段时间或换个网络再试',
+      '-403': '签名校验失败，请退出后重新登录再试',
+      '-101': '未登录，请先登录 B 站'
+    }
+    return {
+      error: HINTS[String(data.code)] || data.message || '搜索失败',
+      code: data.code
+    }
+  }
+
+  const list = (data.data && data.data.result) || []
+  const items = list
+    .filter((it) => it && it.bvid)
+    .map((it) => ({
+      bvid: it.bvid,
+      url: `https://www.bilibili.com/video/${it.bvid}`,
+      title: stripHtml(it.title),
+      cover: normalizePic(it.pic),
+      author: String(it.author || ''),
+      authorFace: '',
+      duration: parseDurationText(it.duration),
+      desc: stripHtml(it.description || ''),
+      pubdate: Number(it.pubdate) || 0,
+      tname: String(it.typename || ''),
+      stat: {
+        view: Number(it.play) || 0,
+        danmaku: Number(it.video_review) || 0,
+        like: Number(it.like) || 0,
+        coin: 0,
+        favorite: Number(it.favorites) || 0,
+        share: 0,
+        reply: Number(it.review) || 0
+      },
+      tags: []
+    }))
+
+  return { ok: true, keyword: kw, items }
+}
+
+// 把勾选的搜索结果写入「搜索列表」分区（按 bvid 去重，已存在的跳过）
+function importSearchItems(items) {
+  const list = Array.isArray(items) ? items : []
+  if (list.length === 0) return { error: '没有选中任何视频' }
+
+  let added = 0
+  let skipped = 0
+  for (const item of list) {
+    if (!item || !item.bvid) continue
+    const r = addVideo(item, 'search')
+    if (r.exists) skipped++
+    else added++
+  }
+  return { ok: true, total: list.length, added, skipped }
+}
+
+// ===== 检查更新 =====
+// 比对 GitHub Release 的最新版本号与本地版本，有新版本则提示下载。
+const REPO_SLUG = 'Chadaidai-offical/bilibili-collector'
+
+// 语义化版本比较：a 比 b 新返回 1，相同返回 0，旧返回 -1
+function compareVersion(a, b) {
+  const pa = String(a || '')
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0)
+  const pb = String(b || '')
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] || 0
+    const y = pb[i] || 0
+    if (x > y) return 1
+    if (x < y) return -1
+  }
+  return 0
+}
+
+const API_LATEST_URL = `https://api.github.com/repos/${REPO_SLUG}/releases/latest`
+const RAW_PKG_URL = `https://raw.githubusercontent.com/${REPO_SLUG}/main/package.json`
+const JSDELIVR_TAGS_URL = `https://data.jsdelivr.com/v1/package/gh/${REPO_SLUG}`
+const UA_HEADER = { 'User-Agent': 'bilibili-collector' }
+
+// 检查更新缓存：GitHub 匿名接口限额「每出口 IP 60 次/小时」，
+// 而共享代理 IP 很容易被别的用户提前用光（表现为 403 rate limit）。
+// 所以：① 自动检查走 30 分钟缓存；② API 失败时自动降级到备用源。
+const UPDATE_CACHE_TTL = 30 * 60 * 1000
+const updateState = { at: 0, etag: '', apiInfo: null, lastResult: null }
+
+function releaseUrl(version) {
+  return version
+    ? `https://github.com/${REPO_SLUG}/releases/tag/v${version}`
+    : `https://github.com/${REPO_SLUG}/releases`
+}
+
+// 从一批版本号里挑出最高的（兼容 v1.2.0 / 1.2.0 两种写法）
+function pickLatestVersion(list) {
+  let best = ''
+  for (const raw of list || []) {
+    const v = String(raw || '').replace(/^v/i, '').trim()
+    if (!v || !/^\d/.test(v)) continue
+    if (!best || compareVersion(v, best) > 0) best = v
+  }
+  return best
+}
+
+// 通道一：GitHub 官方 API —— 信息最全（更新说明/发布时间），但受匿名配额限制
+async function latestFromApi() {
+  const headers = { ...UA_HEADER, Accept: 'application/vnd.github+json' }
+  // 带上 ETag：命中 304 时 GitHub 不计入配额
+  if (updateState.etag) headers['If-None-Match'] = updateState.etag
+  const res = await net.fetch(API_LATEST_URL, { headers })
+
+  if (res.status === 304 && updateState.apiInfo) return updateState.apiInfo
+  if (!res.ok) {
+    let body = ''
+    try {
+      body = await res.text()
+    } catch (_) {
+      /* 忽略读取失败 */
+    }
+    const err = new Error(`GitHub API HTTP ${res.status}`)
+    err.status = res.status
+    err.rateLimited = res.status === 403 && /rate limit/i.test(body)
+    err.detail = body.slice(0, 200)
+    throw err
+  }
+  if (res.headers.get('etag')) updateState.etag = res.headers.get('etag')
+
+  const data = await res.json()
+  const latest = String(data.tag_name || '').replace(/^v/i, '').trim()
+  if (!latest) throw new Error('API 未返回版本号')
+  const info = {
+    latest,
+    url: data.html_url || releaseUrl(latest),
+    name: data.name || '',
+    notes: String(data.body || '').slice(0, 1500),
+    publishedAt: data.published_at || '',
+    source: 'api'
+  }
+  updateState.apiInfo = info
+  return info
+}
+
+// 通道二：raw 上的 package.json（约 2KB，随 main 分支即时反映版本号）
+async function latestFromRaw() {
+  const res = await net.fetch(RAW_PKG_URL, { headers: { ...UA_HEADER, Accept: 'application/json' } })
+  if (!res.ok) throw new Error(`raw HTTP ${res.status}`)
+  const data = await res.json()
+  const latest = String(data.version || '').trim()
+  if (!latest) throw new Error('raw 未返回版本号')
+  return { latest, url: releaseUrl(latest), source: 'raw' }
+}
+
+// 通道三：jsDelivr 数据接口（走 CDN，不受 GitHub 配额限制，但版本列表有缓存延迟）
+async function latestFromJsdelivr() {
+  const res = await net.fetch(JSDELIVR_TAGS_URL, {
+    headers: { ...UA_HEADER, Accept: 'application/json' }
+  })
+  if (!res.ok) throw new Error(`jsDelivr HTTP ${res.status}`)
+  const data = await res.json()
+  const latest = pickLatestVersion([
+    ...Object.values(data.tags || {}),
+    ...(Array.isArray(data.versions) ? data.versions : [])
+  ])
+  if (!latest) throw new Error('jsDelivr 未返回版本号')
+  return { latest, url: releaseUrl(latest), source: 'jsdelivr' }
+}
+
+async function checkUpdate(manual = false) {
+  const current = app.getVersion()
+  const now = Date.now()
+
+  // 自动检查（启动静默检查）走缓存，避免每次启动都消耗配额；手动检查立即发请求
+  if (!manual && updateState.lastResult && now - updateState.at < UPDATE_CACHE_TTL) {
+    return { ...updateState.lastResult, cached: true }
+  }
+
+  const channels = [
+    ['api', latestFromApi],
+    ['raw', latestFromRaw],
+    ['jsdelivr', latestFromJsdelivr]
+  ]
+  const failures = []
+  let info = null
+  for (const [name, fn] of channels) {
+    try {
+      info = await fn()
+      break
+    } catch (err) {
+      failures.push({ channel: name, message: err.message, rateLimited: !!err.rateLimited })
+    }
+  }
+
+  // 全部通道都失败：不缓存失败结果（下次手动点可立即重试），并给出可操作的提示
+  if (!info) {
+    const rateLimited = failures.some((f) => f.rateLimited)
+    return {
+      ok: false,
+      current,
+      rateLimited,
+      url: releaseUrl(),
+      error: rateLimited
+        ? 'GitHub 接口配额已用尽（匿名接口按出口 IP 限 60 次/小时，这个 IP 上的额度被别的用户用光了），备用源也没取到，请稍后再试'
+        : `检查更新失败：${failures[0] ? failures[0].message : '网络异常'}`,
+      detail: failures.map((f) => `${f.channel}: ${f.message}`).join(' | ')
+    }
+  }
+
+  const result = {
+    ok: true,
+    current,
+    latest: info.latest,
+    hasUpdate: compareVersion(info.latest, current) > 0,
+    url: info.url,
+    name: info.name || '',
+    notes: info.notes || '',
+    publishedAt: info.publishedAt || '',
+    source: info.source,
+    // 主通道失败但备用源成功时，把情况记下来（前端可提示"已切换备用通道"）
+    fellBack: failures.length > 0 ? failures.map((f) => f.channel).join(',') : ''
+  }
+  updateState.at = now
+  updateState.lastResult = result
+  return result
 }
 
 // ===== 标签管理 =====
@@ -1233,6 +1575,31 @@ ipcMain.handle('check-invalid', async (event, source) => {
 // 打开 B 站客户端（没装则退回网页）
 ipcMain.handle('open-bilibili', () => openBilibiliApp())
 
+// 全站搜索（走 wbi 签名）+ 搜索结果入库到「搜索列表」分区
+ipcMain.handle('search-bili', async (_event, keyword) => {
+  try {
+    return await searchBili(keyword)
+  } catch (err) {
+    return { error: err.message || '搜索失败' }
+  }
+})
+ipcMain.handle('import-search-items', safe((items) => importSearchItems(items)))
+
+// 检查更新 + 打开外部链接（下载页 / Release 页）
+ipcMain.handle('check-update', async (_event, manual) => {
+  try {
+    return await checkUpdate(!!manual)
+  } catch (err) {
+    return { ok: false, url: `https://github.com/${REPO_SLUG}/releases`, error: err.message || '检查更新失败' }
+  }
+})
+ipcMain.handle('open-external', (_event, url) => {
+  const u = String(url || '')
+  if (!/^https?:\/\//i.test(u)) return { error: '链接不合法' }
+  shell.openExternal(u)
+  return { ok: true }
+})
+
 // B 站登录 + 收藏夹/稍后再看导入
 ipcMain.handle('check-login', () => checkLogin())
 ipcMain.handle('open-login', () => openLogin())
@@ -1277,3 +1644,15 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+// 导出内部纯函数，供端到端测试断言（不影响主进程运行）
+module.exports = {
+  getMixinKey,
+  signWbi,
+  stripHtml,
+  normalizePic,
+  parseDurationText,
+  compareVersion,
+  importSearchItems,
+  extractWbiKey
+}

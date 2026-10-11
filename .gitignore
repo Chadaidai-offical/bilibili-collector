@@ -3,3 +3,7 @@ dist
 out
 .DS_Store
 *.log
+
+# 导出的收藏 / 分享文件（属于个人数据，不要提交）
+B站*.json
+*-分享-*.json
