@@ -144,6 +144,8 @@ function App() {
   const [favFolders, setFavFolders] = useState([])
   const [selectedFolder, setSelectedFolder] = useState('')
   const [importing, setImporting] = useState(false)
+  // 导入时逐条抓 B 站标签的进度（{ done, total }）
+  const [importTags, setImportTags] = useState(null)
 
   // 视频下载：先选清晰度（拉 accept_quality 列表），再选保存位置并下载
   const [dlVideo, setDlVideo] = useState(null) // 打开清晰度弹窗的目标视频
@@ -198,6 +200,14 @@ function App() {
     const off = window.api.onDownloadProgress((p) => {
       setDlProgress((prev) => (prev && prev.jobId === p.jobId ? { ...prev, ...p } : prev))
     })
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [])
+
+  // 订阅「抓取 B 站标签」进度（导入收藏夹 / 稍后再看时逐条抓取）
+  useEffect(() => {
+    const off = window.api.onImportTagsProgress((p) => setImportTags(p))
     return () => {
       if (typeof off === 'function') off()
     }
@@ -491,15 +501,23 @@ function App() {
     }
   }
 
+  // 导入结果里补一句「B 站标签抓取」的情况，便于判断是否被风控打断
+  function summarizeTags(res) {
+    if (res.tagsBlocked) return '（B 站标签抓取被风控打断，已抓到的已保存）'
+    const filled = Number(res.tagsFilled) || 0
+    return filled > 0 ? `，补齐 B 站标签 ${filled} 条` : ''
+  }
+
   async function handleDoImport() {
     if (!selectedFolder) return
     setImporting(true)
+    setImportTags(null)
     try {
       const res = await window.api.importFavorites(Number(selectedFolder))
       if (res && res.error) {
         setError(res.error)
       } else if (res && res.ok) {
-        flash(`导入完成：新增 ${res.added} 条，已存在跳过 ${res.skipped} 条`)
+        flash(`导入完成：新增 ${res.added} 条，已存在跳过 ${res.skipped} 条${summarizeTags(res)}`)
       }
       setShowFolderPicker(false)
       refresh(keyword, source)
@@ -507,23 +525,27 @@ function App() {
       setError(err.message || '导入失败')
     } finally {
       setImporting(false)
+      setImportTags(null)
     }
   }
 
   // 一键拉取「稍后再看」到 toview 分区
   async function handleImportWatchLater() {
     try {
+      setImportTags(null)
       const res = await window.api.importWatchLater()
       if (res && res.error) {
         setError(res.error)
         return
       }
       if (res && res.ok) {
-        flash(`稍后再看拉取完成：新增 ${res.added} 条，已存在跳过 ${res.skipped} 条`)
+        flash(`稍后再看拉取完成：新增 ${res.added} 条，已存在跳过 ${res.skipped} 条${summarizeTags(res)}`)
       }
       refresh(keyword, source)
     } catch (err) {
       setError(err.message || '拉取稍后再看失败')
+    } finally {
+      setImportTags(null)
     }
   }
 
@@ -1369,6 +1391,14 @@ function App() {
 
           {/* 失效检测：一键体检当前分区，逐条请求 B 站判断稿件是否失效 */}
           <div className="tool-row">
+            {importTags && (
+              <span
+                className="import-tags-tip"
+                title="导入时正在逐个抓取视频在 B 站的原始标签，作为默认标签"
+              >
+                🏷 抓取 B 站标签 {importTags.done}/{importTags.total}…
+              </span>
+            )}
             <button
               className="btn-ghost"
               onClick={handleCheckInvalid}

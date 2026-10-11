@@ -106,11 +106,18 @@ async function fetchVideoInfo(url) {
 
   // 从公开页面的 __INITIAL_STATE__ 里解析更完整的结构化数据（仍属公开内容，无需 cookie）
   let videoData = null
+  let pageTags = []
   try {
     const json = extractInitialState(html)
     if (json) {
       const state = JSON.parse(json)
       videoData = state.videoData || null
+      // 视频标签就在公开页里（videoData.tags），顺手白捡，不用再单独请求标签接口。
+      // 注意：数组里常有一条 tag_id=0 的「发现《BGM 名》」音乐标签，要过滤掉。
+      const rawTags = (videoData && videoData.tags) || state.tags || []
+      if (Array.isArray(rawTags)) {
+        pageTags = rawTags.filter((t) => t && Number(t.tag_id) > 0).map((t) => t.tag_name)
+      }
     }
   } catch {
     videoData = null
@@ -135,6 +142,8 @@ async function fetchVideoInfo(url) {
     desc: (videoData && videoData.desc) || '',
     pubdate: (videoData && videoData.pubdate) || 0,
     tname: (videoData && videoData.tname) || '',
+    // B 站原始标签，作为默认标签一起入库（从公开页白捡，零额外请求）
+    tags: cleanTags(pageTags),
     stat: {
       view: stat.view || 0,
       danmaku: stat.danmaku || 0,
@@ -316,6 +325,76 @@ function safeParseTags(tags) {
       .map((s) => s.trim())
       .filter(Boolean)
   }
+}
+
+// ===== B 站原始标签（作为「默认标签」随视频一起入库）=====
+// 单个视频最多收录 20 个标签（B 站自己的量级也差不多），空值 / 超长 / 重复的一律丢掉
+const MAX_TAGS = 20
+
+function cleanTags(list) {
+  const out = []
+  const seen = new Set()
+  for (const raw of Array.isArray(list) ? list : []) {
+    const name = String(raw == null ? '' : raw).trim()
+    if (!name || name.length > 30) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(name)
+    if (out.length >= MAX_TAGS) break
+  }
+  return out
+}
+
+// 抓单个视频在 B 站的原始标签。走公开只读接口 /x/tag/archive/tags（匿名也能访问），
+// 比 view/detail 轻得多。失败一律当作「没有标签」—— 标签只是附加信息，
+// 不能因为它失败就中断整批导入。
+async function fetchVideoTags(bvid) {
+  if (!bvid) return { tags: [] }
+  try {
+    const res = await biliFetch(
+      `https://api.bilibili.com/x/tag/archive/tags?bvid=${encodeURIComponent(bvid)}`
+    )
+    if (!res.ok) return { tags: [] }
+    const data = await res.json()
+    if (data.code !== 0) {
+      // -412（IP 被拦）/ -352（风控）：标记 blocked，让上层立刻停止继续抓，别越陷越深
+      const blocked = data.code === -412 || data.code === -352
+      return { tags: [], blocked, code: data.code }
+    }
+    return { tags: cleanTags((data.data || []).map((t) => t && t.tag_name)) }
+  } catch {
+    return { tags: [] }
+  }
+}
+
+// 批量抓标签：4 并发 + 每条 180ms 间隔（比失效检测的 4 并发 / 150ms 再保守一档）。
+// 返回 { byBvid, fetched, blocked }；onProgress 形如 { done, total }
+async function fetchTagsBatch(bvids, onProgress) {
+  const list = Array.isArray(bvids) ? bvids : []
+  const byBvid = new Map()
+  if (list.length === 0) return { byBvid, fetched: 0, blocked: false }
+
+  let cursor = 0
+  let done = 0
+  let blocked = false
+
+  const worker = async () => {
+    for (;;) {
+      if (blocked) return
+      const i = cursor++
+      if (i >= list.length) return
+      const r = await fetchVideoTags(list[i])
+      if (r.blocked) blocked = true
+      if (r.tags && r.tags.length) byBvid.set(list[i], r.tags)
+      done++
+      if (typeof onProgress === 'function') onProgress({ done, total: list.length })
+      await new Promise((res) => setTimeout(res, 180))
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker))
+  return { byBvid, fetched: byBvid.size, blocked }
 }
 
 // 按 bvid 查询（判断是否已收录）
@@ -643,7 +722,8 @@ async function searchBili(keyword) {
         share: 0,
         reply: Number(it.review) || 0
       },
-      tags: []
+      // 搜索结果自带 tag 字段（逗号分隔字符串，如「程序员,Python教程」），白捡，零额外请求
+      tags: cleanTags(String(it.tag || '').split(','))
     }))
 
   return { ok: true, keyword: kw, items }
@@ -1684,7 +1764,7 @@ async function listFavFolders() {
 }
 
 // 分页拉取指定收藏夹的视频并入库（type=2 为视频，页间延时控频）
-async function importFavorites(mediaId) {
+async function importFavorites(mediaId, onTagsProgress) {
   const login = await checkLogin()
   if (!login.loggedIn) return { error: '未登录，请先登录 B 站' }
   if (!mediaId) return { error: '缺少收藏夹 ID' }
@@ -1693,6 +1773,8 @@ async function importFavorites(mediaId) {
   let added = 0
   let skipped = 0
   let total = 0
+  let tagsFilled = 0
+  let tagsBlocked = false
 
   for (;;) {
     let data
@@ -1709,12 +1791,24 @@ async function importFavorites(mediaId) {
       return { error: data.message || `拉取收藏夹失败（code ${data.code}）`, added, skipped, total }
     }
 
-    const medias = (data.data && data.data.medias) || []
-    for (const m of medias) {
-      // 只导入视频（type 2 = 视频；12 = 音频等其它类型跳过）
-      if (m.type !== 2) continue
-      if (!m.bvid) continue
+    // 只导入视频（type 2 = 视频；12 = 音频等其它类型跳过）
+    const medias = ((data.data && data.data.medias) || []).filter((m) => m && m.type === 2 && m.bvid)
 
+    // 这一页里「还没有标签」的视频：新条目，或已入库但当初没存标签的旧记录。
+    // 已经手动打过标签的记录直接跳过 —— 既不覆盖你的标签，也不浪费请求。
+    const needTags = medias
+      .filter((m) => {
+        const exist = getByBvid(m.bvid, 'fav')
+        return !exist || !Array.isArray(exist.tags) || exist.tags.length === 0
+      })
+      .map((m) => m.bvid)
+
+    const { byBvid, blocked } = needTags.length
+      ? await fetchTagsBatch(needTags, onTagsProgress)
+      : { byBvid: new Map() }
+    if (blocked) tagsBlocked = true
+
+    for (const m of medias) {
       const video = {
         bvid: m.bvid,
         url: `https://www.bilibili.com/video/${m.bvid}`,
@@ -1736,7 +1830,8 @@ async function importFavorites(mediaId) {
           share: 0,
           reply: 0
         },
-        tags: [],
+        // B 站原始标签作为默认标签；抓不到就是空数组（不影响入库）
+        tags: byBvid.get(m.bvid) || [],
         // B 站收藏时间（秒级时间戳），用于「最新收藏 → 最久之前」排序
         favTime: m.fav_time || 0
       }
@@ -1752,6 +1847,12 @@ async function importFavorites(mediaId) {
         if (m.cid && !r.video.cid) {
           db.prepare('UPDATE videos SET cid = ? WHERE id = ?').run(m.cid, r.video.id)
         }
+        // 旧数据没有标签：把这次抓到的补上（重新导入一次即可给存量数据补标签）
+        const gotTags = byBvid.get(m.bvid)
+        if (gotTags && gotTags.length && (!Array.isArray(r.video.tags) || r.video.tags.length === 0)) {
+          db.prepare('UPDATE videos SET tags = ? WHERE id = ?').run(JSON.stringify(gotTags), r.video.id)
+          tagsFilled++
+        }
       } else added++
       total++
     }
@@ -1762,12 +1863,12 @@ async function importFavorites(mediaId) {
     await new Promise((resolve) => setTimeout(resolve, 1500))
   }
 
-  return { ok: true, added, skipped, total }
+  return { ok: true, added, skipped, total, tagsFilled, tagsBlocked }
 }
 
 // 拉取「稍后再看」列表并入库到 toview 分区。
 // 接口 /x/v2/history/toview 一次返回全部（上限 100 条），按添加时间排列。
-async function importWatchLater() {
+async function importWatchLater(onTagsProgress) {
   const login = await checkLogin()
   if (!login.loggedIn) return { error: '未登录，请先登录 B 站' }
 
@@ -1783,13 +1884,27 @@ async function importWatchLater() {
     return { error: data.message || `拉取稍后再看失败（code ${data.code}）` }
   }
 
-  const list = (data.data && data.data.list) || []
+  const list = ((data.data && data.data.list) || []).filter((m) => m && m.bvid)
   let added = 0
   let skipped = 0
   let total = 0
+  let tagsFilled = 0
+  let tagsBlocked = false
+
+  // 只给「还没有标签」的条目抓（新条目 + 旧的无标签记录），手动打过标签的跳过
+  const needTags = list
+    .filter((m) => {
+      const exist = getByBvid(m.bvid, 'toview')
+      return !exist || !Array.isArray(exist.tags) || exist.tags.length === 0
+    })
+    .map((m) => m.bvid)
+
+  const { byBvid, blocked } = needTags.length
+    ? await fetchTagsBatch(needTags, onTagsProgress)
+    : { byBvid: new Map() }
+  if (blocked) tagsBlocked = true
 
   for (const m of list) {
-    if (!m.bvid) continue
     const stat = m.stat || {}
     const video = {
       bvid: m.bvid,
@@ -1812,7 +1927,8 @@ async function importWatchLater() {
         share: stat.share || 0,
         reply: stat.reply || 0
       },
-      tags: [],
+      // B 站原始标签作为默认标签；抓不到就是空数组（不影响入库）
+      tags: byBvid.get(m.bvid) || [],
       // 加入稍后再看的时间（add_at），用于「最新 → 最久之前」排序
       favTime: m.add_at || m.ctime || 0
     }
@@ -1826,11 +1942,17 @@ async function importWatchLater() {
       if (m.cid && !r.video.cid) {
         db.prepare('UPDATE toview SET cid = ? WHERE id = ?').run(m.cid, r.video.id)
       }
+      // 旧数据没有标签：把这次抓到的补上
+      const gotTags = byBvid.get(m.bvid)
+      if (gotTags && gotTags.length && (!Array.isArray(r.video.tags) || r.video.tags.length === 0)) {
+        db.prepare('UPDATE toview SET tags = ? WHERE id = ?').run(JSON.stringify(gotTags), r.video.id)
+        tagsFilled++
+      }
     } else added++
     total++
   }
 
-  return { ok: true, added, skipped, total }
+  return { ok: true, added, skipped, total, tagsFilled, tagsBlocked }
 }
 
 // ===== 创建窗口 =====
@@ -1996,8 +2118,26 @@ ipcMain.handle('check-login', () => checkLogin())
 ipcMain.handle('open-login', () => openLogin())
 ipcMain.handle('logout', () => logout())
 ipcMain.handle('list-fav-folders', () => listFavFolders())
-ipcMain.handle('import-favorites', (_event, mediaId) => importFavorites(mediaId))
-ipcMain.handle('import-watch-later', () => importWatchLater())
+// 导入收藏夹 / 稍后再看：会把视频在 B 站的原始标签一并抓下来作为「默认标签」。
+// 抓标签阶段通过 'import-tags-progress' 事件回报进度（{ done, total }）。
+ipcMain.handle('import-favorites', async (event, mediaId) => {
+  try {
+    return await importFavorites(mediaId, (p) => {
+      if (!event.sender.isDestroyed()) event.sender.send('import-tags-progress', p)
+    })
+  } catch (err) {
+    return { error: err.message || '导入收藏夹失败' }
+  }
+})
+ipcMain.handle('import-watch-later', async (event) => {
+  try {
+    return await importWatchLater((p) => {
+      if (!event.sender.isDestroyed()) event.sender.send('import-tags-progress', p)
+    })
+  } catch (err) {
+    return { error: err.message || '拉取稍后再看失败' }
+  }
+})
 
 // 导出 / 导入他人分享
 ipcMain.handle('export-videos', async (_event, source) => {

@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.3.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.3.0/Bilibili-Collector-Setup-1.3.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.4.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.0/Bilibili-Collector-Setup-1.4.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -39,6 +39,7 @@
 - **搜索 B 站全站**：输入关键词直接搜 B 站全站视频（走官方网页端接口 + wbi 签名），结果是**预览勾选**式的——你自己挑要哪些再入库，存进「搜索导入」分区
 - **导入他人分享**：支持**拖拽 `.json` 文件进窗口**或点「导入分享文件」走系统文件对话框，把别人导出的收藏列表导入进来
 - **下载视频到本地**：列表每行「⬇ 下载」，选清晰度与保存位置后把视频存成本地 `mp4`（音视频自动合并，见下方「下载视频」章节）
+- **自动带上 B 站标签**：导入收藏夹、拉取稍后再看、搜索入库、手动粘贴时，会把视频在 B 站的**原始标签一并抓下来作为默认标签**（单个视频最多 20 个），直接就能拿来筛选；**已经手动打过标签的记录不会被覆盖**
 
 ### 二、浏览与查找
 
@@ -116,6 +117,7 @@
 - **模式**：SQLite **WAL**（读写更稳定，适合频繁小事务）
 - **表**：`videos`（收藏）、`toview`（稍后再看）、`shared`（分享导入）、`search`（搜索导入）
 - **主要字段**：`bvid` / `url` / `title` / `cover` / `author` / `author_face` / `duration` / `description` / `pubdate` / `tname` / `stat`(JSON) / `tags`(JSON) / `watched` / `fav_time`(收录时间戳) / `cid`(用于下载取流) / `invalid`(失效标记) / `created_at`
+- **标签来源**：`tags`（JSON 数组）里既可能是你手动打的标签，也可能是导入时从 B 站一并带下来的原始标签；重新导入时只给「还没有标签」的记录补充，**不会覆盖**你整理过的标签
 - **`shared` 额外字段**：`share_from`（分享者昵称）、`share_mid`，唯一约束为 `UNIQUE(bvid, share_from)`
 - **自动迁移**：程序启动时用 `PRAGMA table_info` 检查缺哪列就补哪列，老版本数据库可以直接升级，不会丢数据
 
@@ -131,7 +133,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.3.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.3.0/Bilibili-Collector-Setup-1.3.0.exe) | 约 105 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.4.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.4.0/Bilibili-Collector-Setup-1.4.0.exe) | 约 105 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -259,8 +261,9 @@ git push origin main
 
 ### 3. 频率控制与风控
 
-- 导入收藏夹时，程序在翻页之间**内置了 1.5 秒延时**；失效检测则是**4 并发 + 每条 150ms 间隔**。这些都是用于控制请求频率、避免触发 B 站风控的。**请勿自行调短或移除这些延时**，否则可能触发 `412` 封 IP、弹验证码，甚至导致登录态失效。
+- 导入收藏夹时，程序在翻页之间**内置了 1.5 秒延时**；失效检测是**4 并发 + 每条 150ms 间隔**；导入时抓取 B 站标签是**4 并发 + 每条 180ms 间隔**。这些都是用于控制请求频率、避免触发 B 站风控的。**请勿自行调短或移除这些延时**，否则可能触发 `412` 封 IP、弹验证码，甚至导致登录态失效。
 - 失效检测会逐条请求 B 站，条数多时耗时较长（100 条约十几秒），请耐心等待。
+- 抓取标签同样只能逐条请求（B 站没有批量查标签的接口），100 条约多花 5~7 秒，界面上会显示进度；只给「还没有标签」的记录抓，不会重复请求。
 
 ### 4. 失效判定是「保守策略」
 
@@ -331,7 +334,7 @@ bilibili-collector/
 | 批量 | `batch-add-tags` / `batch-delete-videos` |
 | 标签与统计 | `list-tag-stats` / `edit-tags` / `get-stats` |
 | 失效检测 | `check-invalid`（进度通过 `check-invalid-progress` 事件回报） |
-| 登录与导入 | `check-login` / `open-login` / `logout` / `list-fav-folders` / `import-favorites` / `import-watch-later` |
+| 登录与导入 | `check-login` / `open-login` / `logout` / `list-fav-folders` / `import-favorites` / `import-watch-later`（抓标签进度通过 `import-tags-progress` 事件回报）|
 | 分享 | `export-videos` / `pick-share-file` / `import-share-data` |
 | 全站搜索 | `search-bili`（wbi 签名）/ `import-search-items` |
 | 视频下载 | `get-video-qualities` / `pick-save-path` / `download-video`（进度通过 `download-progress` 事件回报）/ `cancel-download` |
@@ -341,6 +344,19 @@ bilibili-collector/
 ---
 
 ## 更新内容（CHANGELOG）
+
+### v1.4.0（2026-10-11）
+
+导入视频时**把 B 站原始标签一并抓下来，作为默认标签**：
+
+- **四个来源都带标签**：
+  - 手动粘贴链接 → 从视频公开页的 `__INITIAL_STATE__` 白捡，**零额外请求**（会自动过滤掉 `tag_id=0` 的「发现《BGM 名》」音乐标签）
+  - 搜索 B 站全站 → 搜索结果自带 `tag` 字段（逗号分隔），白捡
+  - 导入收藏夹 / 拉取稍后再看 → 这两个接口本身不返回标签，逐条调 `/x/tag/archive/tags` 抓取
+- **控频与容错**：抓标签走 **4 并发 + 每条 180ms 间隔**（比失效检测再保守一档），界面实时显示「🏷 抓取 B 站标签 n/N」；单条失败**静默跳过**，不影响入库；真遇到 `-412` / `-352` 风控会**立即停止抓取**并保留已抓到的数据
+- **不覆盖你的标签**：只给「还没有标签」的记录抓取 —— 已经手动打过的标签原样保留，也不会浪费请求
+- **存量数据可补全**：旧记录（当初没存标签的）在下次导入时会被自动补上标签
+- **上限**：单个视频最多收录 20 个标签（自动去空、去重、去超长）
 
 ### v1.3.0（2026-10-11）
 

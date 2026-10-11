@@ -617,6 +617,13 @@ body {
   flex-wrap: wrap;
 }
 
+/* 导入时逐条抓取 B 站标签的进度提示 */
+.import-tags-tip {
+  font-size: 12px;
+  color: #fb7299;
+  white-space: nowrap;
+}
+
 .chip-invalid {
   padding: 6px 14px;
   border-radius: 16px;

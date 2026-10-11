@@ -45,6 +45,12 @@ contextBridge.exposeInMainWorld('api', {
   listFavFolders: () => ipcRenderer.invoke('list-fav-folders'),
   importFavorites: (mediaId) => ipcRenderer.invoke('import-favorites', mediaId),
   importWatchLater: () => ipcRenderer.invoke('import-watch-later'),
+  // 订阅「抓取 B 站标签」进度（导入收藏夹 / 稍后再看时逐条抓标签）；返回取消订阅函数
+  onImportTagsProgress: (cb) => {
+    const listener = (_event, progress) => cb(progress)
+    ipcRenderer.on('import-tags-progress', listener)
+    return () => ipcRenderer.removeListener('import-tags-progress', listener)
+  },
 
   // 导出 / 导入他人分享
   exportVideos: (source) => ipcRenderer.invoke('export-videos', source),
