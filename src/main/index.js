@@ -1622,7 +1622,7 @@ function buildExportPayload(source = 'fav', exporter = {}) {
       tname: v.tname,
       stat: v.stat,
       tags: v.tags,
-      // v1.5.0 起随分享一起走：标签来源分类 + 平台分词（旧版本读到会忽略，不影响兼容）
+      // v1.5.1 起随分享一起走：标签来源分类 + 平台分词（旧版本读到会忽略，不影响兼容）
       tagMeta: v.tagMeta || {},
       participle: Array.isArray(v.participle) ? v.participle : [],
       watched: v.watched,
@@ -2748,7 +2748,7 @@ module.exports = {
   mergeSimilarTags,
   listTagStats,
   mergeSimilarTagsInDb,
-  // v1.5.0：来源分类 + 平台分词交叉验证 + 共前缀族
+  // v1.5.1：来源分类 + 平台分词交叉验证 + 共前缀族
   topicsFromDesc,
   clusterByCommonPrefix,
   listTagFamilies,

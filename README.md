@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.5.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.0/Bilibili-Collector-Setup-1.5.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.5.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.1/Bilibili-Collector-Setup-1.5.1.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -135,7 +135,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.5.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.0/Bilibili-Collector-Setup-1.5.0.exe) | 约 105 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.5.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.1/Bilibili-Collector-Setup-1.5.1.exe) | 约 105 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -347,7 +347,7 @@ bilibili-collector/
 
 ## 更新内容（CHANGELOG）
 
-### v1.5.0（2026-10-11）
+### v1.5.1（2026-10-11）
 
 让标签**带上来源与分类**，并把「同前缀一族」摆到台面上（**全程零 AI、零额外请求**）：
 
