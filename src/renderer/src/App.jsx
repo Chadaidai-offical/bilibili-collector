@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { applyAppearance } from './appearance.js'
 
 // 秒数 → 「23:32」或「1:23:32」
 function formatDuration(s) {
@@ -169,6 +170,95 @@ function App() {
   const [dlBusy, setDlBusy] = useState(false)
   const [dlProgress, setDlProgress] = useState(null) // { jobId, stage, percent }
 
+  // 外观设置（壁纸 / 卡片透明度 / 背景模糊）
+  const [appearance, setAppearance] = useState(null)
+  const [showAppearance, setShowAppearance] = useState(false)
+  const [wpBusy, setWpBusy] = useState(false)
+  const [wpError, setWpError] = useState('')
+  const wlSaveTimer = useRef(null)
+  const wlPending = useRef({})
+
+  // 滑杆会连续触发，攒 400ms 再落盘一次，避免疯狂写 settings.json
+  async function flushAppearance() {
+    if (wlSaveTimer.current) {
+      clearTimeout(wlSaveTimer.current)
+      wlSaveTimer.current = null
+    }
+    const patch = wlPending.current
+    wlPending.current = {}
+    if (!Object.keys(patch).length) return
+    const state = await window.api.setAppearance(patch)
+    if (state && !state.error) {
+      setAppearance(state)
+      applyAppearance(state)
+    }
+  }
+
+  function queueAppearance(patch) {
+    wlPending.current = { ...wlPending.current, ...patch }
+    if (wlSaveTimer.current) clearTimeout(wlSaveTimer.current)
+    wlSaveTimer.current = setTimeout(flushAppearance, 400)
+  }
+
+  function handleCardOpacity(percent) {
+    if (!appearance) return
+    const value = percent / 100
+    const next = { ...appearance, settings: { ...appearance.settings, cardOpacity: value } }
+    setAppearance(next)
+    applyAppearance(next)
+    queueAppearance({ cardOpacity: value })
+  }
+
+  function handleWallpaperBlur(px) {
+    if (!appearance) return
+    const next = { ...appearance, settings: { ...appearance.settings, wallpaperBlur: px } }
+    setAppearance(next)
+    applyAppearance(next)
+    queueAppearance({ wallpaperBlur: px })
+  }
+
+  // 换壁纸：直接等主进程回状态（要重新拼 resolved.url）
+  async function switchWallpaper(patch) {
+    setWpError('')
+    const state = await window.api.setAppearance({ wallpaper: patch })
+    if (state && state.error) {
+      setWpError(state.error)
+      return
+    }
+    setAppearance(state)
+    applyAppearance(state)
+  }
+
+  async function handlePickWallpaperImage() {
+    setWpError('')
+    setWpBusy(true)
+    try {
+      const state = await window.api.pickWallpaperImage()
+      if (state && state.error) setWpError(state.error)
+      else if (state && !state.canceled) {
+        setAppearance(state)
+        applyAppearance(state)
+      }
+    } catch (err) {
+      setWpError(err.message || '选择图片失败')
+    } finally {
+      setWpBusy(false)
+    }
+  }
+
+  async function handleResetAppearance() {
+    setWpError('')
+    const state = await window.api.setAppearance({
+      wallpaper: { type: 'preset', file: '' },
+      cardOpacity: 0.72,
+      wallpaperBlur: 0
+    })
+    if (state && !state.error) {
+      setAppearance(state)
+      applyAppearance(state)
+    }
+  }
+
   // 刷新列表（带关键词搜索），按当前分区取数；顺带刷新该分区的整体统计
   async function refresh(key = keyword, src = source) {
     try {
@@ -197,6 +287,19 @@ function App() {
       .then((info) => setLoginInfo(info))
       .catch(() => setLoginInfo({ loggedIn: false }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 读取外观设置：首屏壁纸已由 appearance.js 同步铺好，这一步是补齐面板要用的预设列表
+  useEffect(() => {
+    window.api
+      .getAppearance()
+      .then((state) => {
+        if (state) {
+          setAppearance(state)
+          applyAppearance(state)
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // 关键词或分区变化时实时搜索
@@ -1141,6 +1244,13 @@ function App() {
             </button>
             <button className="btn-open-client" onClick={handleOpenBilibili}>
               打开B站客户端
+            </button>
+            <button
+              className="btn-open-client"
+              onClick={() => setShowAppearance(true)}
+              title="换壁纸、调整卡片透明度与背景模糊"
+            >
+              外观
             </button>
           </div>
         </div>
@@ -2153,11 +2263,129 @@ function App() {
         </div>
       )}
 
+      {showAppearance && appearance && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            flushAppearance()
+            setShowAppearance(false)
+          }}
+        >
+          <div className="modal wp-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>外观</h3>
+
+            <div className="wp-section">
+              <div className="wp-label">
+                <span>壁纸</span>
+                <span className="wp-value">
+                  {!appearance.resolved
+                    ? '未使用'
+                    : appearance.resolved.type === 'user'
+                      ? '自定义图片'
+                      : '预设'}
+                </span>
+              </div>
+              <div className="wp-grid">
+                <button
+                  className={`wp-thumb ${appearance.resolved ? '' : 'on'}`}
+                  onClick={() => switchWallpaper({ type: 'none' })}
+                >
+                  <span className="wp-thumb-none">不用壁纸</span>
+                </button>
+                {appearance.presets.map((p) => (
+                  <button
+                    key={p.file}
+                    className={`wp-thumb ${
+                      appearance.resolved &&
+                      appearance.resolved.type === 'preset' &&
+                      appearance.resolved.file === p.file
+                        ? 'on'
+                        : ''
+                    }`}
+                    onClick={() => switchWallpaper({ type: 'preset', file: p.file })}
+                    title={p.name}
+                  >
+                    <img src={p.url} alt={p.name} loading="lazy" />
+                    <span className="wp-thumb-name">{p.name}</span>
+                  </button>
+                ))}
+                {appearance.presets.length === 0 && (
+                  <div className="wp-empty">
+                    预设目录里还没有图片。把 png / jpg / webp 丢进下面这个文件夹，再打开本面板就会出现在这里（不用重启）：
+                    <br />
+                    <span className="wp-path">{appearance.paths && appearance.paths.preset}</span>
+                  </div>
+                )}
+              </div>
+              <div className="wp-row">
+                <button className="btn-ghost" onClick={handlePickWallpaperImage} disabled={wpBusy}>
+                  {wpBusy ? '处理中…' : '选择本地图片…'}
+                </button>
+                <span className="wp-hint">
+                  选中的图片会复制一份到应用数据目录，原图移动或删除都不影响
+                </span>
+              </div>
+            </div>
+
+            <div className="wp-section">
+              <div className="wp-label">
+                <span>卡片透明度</span>
+                <span className="wp-value">
+                  {Math.round((appearance.settings.cardOpacity ?? 0.72) * 100)}%
+                </span>
+              </div>
+              <input
+                className="wp-range"
+                type="range"
+                min={30}
+                max={100}
+                step={1}
+                value={Math.round((appearance.settings.cardOpacity ?? 0.72) * 100)}
+                onChange={(e) => handleCardOpacity(Number(e.target.value))}
+              />
+              <div className="wp-hint">数值越小壁纸越明显；拉到 100% 就回到完全不透明的老样子</div>
+            </div>
+
+            <div className="wp-section">
+              <div className="wp-label">
+                <span>背景模糊</span>
+                <span className="wp-value">{appearance.settings.wallpaperBlur ?? 0} px</span>
+              </div>
+              <input
+                className="wp-range"
+                type="range"
+                min={0}
+                max={24}
+                step={1}
+                value={appearance.settings.wallpaperBlur ?? 0}
+                onChange={(e) => handleWallpaperBlur(Number(e.target.value))}
+              />
+              <div className="wp-hint">壁纸糊一点，上面的文字更清楚</div>
+            </div>
+
+            {wpError && <div className="wp-error">{wpError}</div>}
+
+            <div className="modal-actions">
+              <button className="btn-ghost" onClick={handleResetAppearance}>
+                恢复默认
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  flushAppearance()
+                  setShowAppearance(false)
+                }}
+              >
+                完成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <footer className="footer">
         <p>数据保存在本地 SQLite，仅抓取公开元信息</p>
-      </footer>
-
-      {dragging && (
+      </footer>      {dragging && (
         <div className="drop-mask">
           <div className="drop-mask-inner">
             <div className="drop-icon">📥</div>

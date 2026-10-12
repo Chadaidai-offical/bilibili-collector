@@ -45,7 +45,7 @@ body {
 
 .btn-open-client:hover {
   border-color: #fb7299;
-  background: #2a1820;
+  background: rgba(var(--s-pink-d), var(--surface-a));
   color: #fb7299;
 }
 
@@ -93,7 +93,7 @@ body {
   padding: 12px 16px;
   border-radius: 8px;
   border: 1px solid #3a3a3a;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   color: #e0e0e0;
   font-size: 14px;
   outline: none;
@@ -123,7 +123,7 @@ body {
   margin-top: 16px;
   padding: 12px 16px;
   border-radius: 8px;
-  background: #3a2020;
+  background: rgba(var(--s-danger), var(--surface-a));
   color: #ff8a8a;
   font-size: 14px;
 }
@@ -134,7 +134,7 @@ body {
   margin-top: 24px;
   padding: 16px;
   border-radius: 12px;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   border: 1px solid #3a3a3a;
 }
 
@@ -223,7 +223,7 @@ body {
   margin-top: 16px;
   padding: 12px 16px;
   border-radius: 8px;
-  background: #1f3a2f;
+  background: rgba(var(--s-success), var(--surface-a));
   color: #7ee2a8;
   font-size: 14px;
 }
@@ -275,7 +275,7 @@ body {
 }
 
 .btn-danger:hover {
-  background: #3a2020;
+  background: rgba(var(--s-danger), var(--surface-a));
 }
 
 .section {
@@ -303,7 +303,7 @@ body {
   padding: 10px 14px;
   border-radius: 8px;
   border: 1px solid #3a3a3a;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   color: #e0e0e0;
   font-size: 14px;
   outline: none;
@@ -356,7 +356,7 @@ body {
   padding: 4px 12px;
   border-radius: 12px;
   border: 1px solid #3a3a3a;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   color: #b8c4ff;
   font-size: 12px;
   cursor: pointer;
@@ -370,7 +370,7 @@ body {
 .tag-chip.on {
   border-color: #fb7299;
   color: #fb7299;
-  background: #2a2030;
+  background: rgba(var(--s-pink), var(--surface-a));
 }
 
 /* ===== 标签筛选面板（默认收起，避免标签铺满整屏） ===== */
@@ -394,7 +394,7 @@ body {
   padding: 5px 12px;
   border-radius: 12px;
   border: 1px solid #3a3a3a;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   color: #9aa4c8;
   font-size: 12px;
   cursor: pointer;
@@ -408,7 +408,7 @@ body {
 .tag-filter-toggle.on {
   border-color: #fb7299;
   color: #fb7299;
-  background: #2a2030;
+  background: rgba(var(--s-pink), var(--surface-a));
 }
 
 .tag-filter-arrow {
@@ -426,7 +426,7 @@ body {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 12px;
-  background: #2a2030;
+  background: rgba(var(--s-pink), var(--surface-a));
   border: 1px solid #fb7299;
   color: #fb7299;
   font-size: 12px;
@@ -457,7 +457,7 @@ body {
   gap: 10px;
   padding: 10px;
   border-radius: 10px;
-  background: #1e1e1e;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   border: 1px solid #333;
 }
 
@@ -528,7 +528,7 @@ body {
   gap: 16px;
   padding: 14px 16px;
   border-radius: 12px;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   border: 1px solid #3a3a3a;
   align-items: center;
 }
@@ -595,14 +595,14 @@ body {
 .tag {
   padding: 3px 10px;
   border-radius: 12px;
-  background: #333;
+  background: rgba(var(--s-chip), var(--surface-a));
   color: #b8c4ff;
   font-size: 12px;
 }
 
 /* 活动 / 话题标签：和普通分类标签区分开，一眼看出这是「某一期活动」 */
 .tag-topic {
-  background: #3a2a12;
+  background: rgba(var(--s-amber), var(--surface-a));
   color: #e0a458;
 }
 
@@ -633,7 +633,7 @@ body {
   padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid #fb7299;
-  background: #1a1a1a;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   color: #e0e0e0;
   font-size: 13px;
   outline: none;
@@ -659,7 +659,7 @@ body {
 
 .btn-watched.on {
   border-color: #3f9d5f;
-  background: #1f3a2f;
+  background: rgba(var(--s-success), var(--surface-a));
   color: #7ee2a8;
 }
 
@@ -701,7 +701,7 @@ body {
   max-width: 90vw;
   padding: 24px;
   border-radius: 12px;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--modal-a));
   border: 1px solid #3a3a3a;
   display: flex;
   flex-direction: column;
@@ -719,7 +719,7 @@ body {
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid #3a3a3a;
-  background: #1a1a1a;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   color: #e0e0e0;
   font-size: 14px;
   outline: none;
@@ -761,7 +761,7 @@ body {
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid #fb7299;
-  background: #1a1a1a;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   color: #e0e0e0;
   font-size: 13px;
   outline: none;
@@ -793,7 +793,7 @@ body {
 }
 
 .chip-invalid:hover {
-  background: #3a2020;
+  background: rgba(var(--s-danger), var(--surface-a));
 }
 
 .chip-invalid.on {
@@ -818,7 +818,7 @@ body {
   margin-left: 8px;
   padding: 1px 8px;
   border-radius: 10px;
-  background: #3a2020;
+  background: rgba(var(--s-danger), var(--surface-a));
   color: #ff8a8a;
   font-size: 11px;
   font-weight: 600;
@@ -909,7 +909,7 @@ body {
 .stat-hero-divider {
   width: 1px;
   height: 40px;
-  background: #3a3a3a;
+  background: rgba(var(--s-strong), var(--surface-a));
 }
 
 .stat-hero-toggle {
@@ -933,7 +933,7 @@ body {
 .stat-block {
   padding: 16px 18px;
   border-radius: 12px;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   border: 1px solid #3a3a3a;
 }
 
@@ -978,7 +978,7 @@ body {
 .stat-bar-track {
   height: 8px;
   border-radius: 4px;
-  background: #333;
+  background: rgba(var(--s-chip), var(--surface-a));
   overflow: hidden;
 }
 
@@ -1019,7 +1019,7 @@ body {
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid #3a3a3a;
-  background: #242424;
+  background: rgba(var(--s-surface), var(--surface-a));
   color: #e0e0e0;
   font-size: 13px;
   outline: none;
@@ -1054,7 +1054,7 @@ body {
   gap: 8px;
   padding: 4px;
   border-radius: 10px;
-  background: #1e1e1e;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   border: 1px solid #333;
 }
 
@@ -1065,7 +1065,7 @@ body {
   padding: 5px 12px;
   border-radius: 14px;
   border: 1px solid #3a3a3a;
-  background: #262626;
+  background: rgba(var(--s-surface-3), var(--surface-a));
   color: #b8c4ff;
   font-size: 12px;
   cursor: pointer;
@@ -1078,7 +1078,7 @@ body {
 
 .tag-mgr-item.on {
   border-color: #fb7299;
-  background: #2a2030;
+  background: rgba(var(--s-pink), var(--surface-a));
   color: #fb7299;
 }
 
@@ -1097,7 +1097,7 @@ body {
 .tag-mgr-count {
   padding: 0 6px;
   border-radius: 8px;
-  background: #333;
+  background: rgba(var(--s-chip), var(--surface-a));
   color: #999;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -1166,7 +1166,7 @@ body {
   padding: 4px 10px;
   border-radius: 12px;
   border: 1px solid #3a3a3a;
-  background: #1f1f1f;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   color: #9aa4c0;
   font-size: 12px;
   cursor: pointer;
@@ -1178,7 +1178,7 @@ body {
 
 .tag-chip.on {
   border-color: #6b7fd0;
-  background: #22283c;
+  background: rgba(var(--s-blue), var(--surface-a));
   color: #aab8ff;
 }
 
@@ -1190,12 +1190,12 @@ body {
 }
 
 .src-topic {
-  background: #3a2a12;
+  background: rgba(var(--s-amber), var(--surface-a));
   color: #e0a458;
 }
 
 .src-desc {
-  background: #1e2f2a;
+  background: rgba(var(--s-success), var(--surface-a));
   color: #63c9a8;
 }
 
@@ -1218,7 +1218,7 @@ body {
   padding: 8px 10px;
   margin-bottom: 8px;
   border-radius: 10px;
-  background: #1b1f2a;
+  background: rgba(var(--s-blue-d), var(--surface-a));
   border: 1px solid #2f3a55;
 }
 
@@ -1243,7 +1243,7 @@ body {
   padding: 1px 8px;
   border-radius: 8px;
   border: 1px solid #3d4a6b;
-  background: #232b3f;
+  background: rgba(var(--s-blue), var(--surface-a));
   color: #a8b8ff;
   font-size: 11px;
   cursor: pointer;
@@ -1279,7 +1279,7 @@ body {
   padding: 12px 16px;
   border-radius: 10px;
   border: 1px solid #7a4a5f;
-  background: #2a1820;
+  background: rgba(var(--s-pink-d), var(--surface-a));
 }
 
 .update-text {
@@ -1301,7 +1301,7 @@ body {
 /* 检查更新失败（如 GitHub 匿名接口 IP 配额耗尽）——中性提示，不吓人 */
 .update-bar-warn {
   border-color: #4a4a5f;
-  background: #1e2029;
+  background: rgba(var(--s-blue-d), var(--surface-a));
 }
 
 .update-bar-warn .update-text {
@@ -1320,7 +1320,7 @@ body {
   padding: 16px;
   border-radius: 12px;
   border: 1px solid #333;
-  background: #1f1f1f;
+  background: rgba(var(--s-surface-2), var(--surface-a));
 }
 
 .bili-search-head {
@@ -1336,7 +1336,7 @@ body {
   padding: 9px 14px;
   border-radius: 8px;
   border: 1px solid #3a3a3a;
-  background: #262626;
+  background: rgba(var(--s-surface-3), var(--surface-a));
   color: #e0e0e0;
   font-size: 13px;
   outline: none;
@@ -1386,12 +1386,12 @@ body {
 }
 
 .bili-search-item:hover {
-  background: #262626;
+  background: rgba(var(--s-surface-3), var(--surface-a));
 }
 
 .bili-search-item.on {
   border-color: #fb7299;
-  background: #2a2030;
+  background: rgba(var(--s-pink), var(--surface-a));
 }
 
 .pick-box {
@@ -1408,7 +1408,7 @@ body {
   height: 60px;
   object-fit: cover;
   border-radius: 6px;
-  background: #262626;
+  background: rgba(var(--s-surface-3), var(--surface-a));
 }
 
 .bili-search-meta {
@@ -1440,7 +1440,7 @@ body {
   gap: 12px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: #232a33;
+  background: rgba(var(--s-blue-d), var(--surface-a));
   border: 1px solid #33414f;
 }
 
@@ -1454,7 +1454,7 @@ body {
   flex: 1;
   height: 8px;
   border-radius: 4px;
-  background: #141a20;
+  background: rgba(var(--s-deep), var(--surface-a));
   overflow: hidden;
 }
 
@@ -1505,7 +1505,7 @@ body {
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid #3a3a3a;
-  background: #1a1a1a;
+  background: rgba(var(--s-surface-2), var(--surface-a));
   cursor: pointer;
 }
 
@@ -1515,7 +1515,7 @@ body {
 
 .dl-quality-item.on {
   border-color: #4a9eff;
-  background: #1d2833;
+  background: rgba(var(--s-blue-d), var(--surface-a));
 }
 
 .dl-quality-item.off {
@@ -1542,7 +1542,7 @@ body {
 }
 
 .dl-q-tag-dim {
-  background: #3a3a3a;
+  background: rgba(var(--s-strong), var(--surface-a));
   color: #999;
 }
 
@@ -1551,3 +1551,175 @@ body {
   color: #d0a24a;
   line-height: 1.5;
 }
+
+/* ===== 外观： CSS 变量 =====
+   中性表面只存 RGB 分量，透明度交给运行时变量 --surface-a，
+   这样卡片透明度滑杆一改，全场半透明表面同步变化（不用写两套样式）。 */
+:root {
+  --s-surface: 36, 36, 36; /* #242424 卡片 / 输入框 / 弹窗 */
+  --s-surface-2: 30, 30, 30; /* #1e1e1e 卡片内嵌容器 */
+  --s-surface-3: 38, 38, 38; /* #262626 次级块 / 悬浮项 */
+  --s-chip: 51, 51, 51; /* #333 小标签 / 进度轨道 */
+  --s-strong: 58, 58, 58; /* #3a3a3a 分隔线 / 弱化标签 */
+  --s-deep: 20, 26, 32; /* #141a20 深色轨道 */
+  --s-pink: 42, 32, 48;
+  --s-pink-d: 42, 24, 32;
+  --s-danger: 58, 32, 32;
+  --s-success: 31, 55, 46;
+  --s-amber: 58, 42, 18;
+  --s-blue: 34, 41, 60;
+  --s-blue-d: 30, 35, 46;
+
+  /* 运行时变量：由 appearance.js 写在 <html> 的行内样式上 */
+  --surface-a: 0.72;
+  --modal-a: 0.98;
+  --wl-blur: 0px;
+}
+
+/* ===== 壁纸层 =====
+   浮在页面内容之下（z-index 负值），四周各溢出 3% —— 加模糊时边缘不会被拉出底色缝隙 */
+#wl-layer {
+  position: fixed;
+  inset: -3%;
+  z-index: -2;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+/* 只有真的铺了壁纸才压暗色遮罩：任何图片上文字都要看得清 */
+html.has-wallpaper body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(10, 10, 14, 0.42);
+  pointer-events: none;
+}
+
+/* ===== 外观设置面板 ===== */
+.wp-modal {
+  width: 560px;
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.wp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wp-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ccc;
+}
+
+.wp-value {
+  color: #fb7299;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.wp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+}
+
+.wp-thumb {
+  position: relative;
+  height: 74px;
+  padding: 0;
+  border: 1px solid #3a3a3a;
+  border-radius: 10px;
+  background: rgba(var(--s-surface-2), var(--surface-a));
+  color: #ddd;
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.wp-thumb:hover {
+  border-color: #fb7299;
+}
+
+.wp-thumb.on {
+  border-color: #fb7299;
+  box-shadow: inset 0 0 0 1px #fb7299;
+}
+
+.wp-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wp-thumb-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 3px 7px;
+  font-size: 11px;
+  text-align: left;
+  color: #f0f0f0;
+  background: rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wp-thumb-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #999;
+}
+
+.wp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wp-range {
+  width: 100%;
+  accent-color: #fb7299;
+}
+
+.wp-hint {
+  font-size: 12px;
+  color: #888;
+  line-height: 1.5;
+}
+
+.wp-path {
+  color: #fb7299;
+  word-break: break-all;
+}
+
+.wp-empty {
+  grid-column: 1 / -1;
+  padding: 14px;
+  border: 1px dashed #3a3a3a;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #999;
+  line-height: 1.7;
+}
+
+.wp-error {
+  font-size: 12px;
+  color: #ff9d9d;
+  line-height: 1.5;
+}
+

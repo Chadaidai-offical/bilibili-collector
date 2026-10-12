@@ -6,7 +6,7 @@
 
 ### 📥 直接下载
 
-**[⬇️ Bilibili-Collector-Setup-1.5.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.1/Bilibili-Collector-Setup-1.5.1.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
+**[⬇️ Bilibili-Collector-Setup-1.6.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.6.0/Bilibili-Collector-Setup-1.6.0.exe)** —— Windows 10/11 (x64)，约 105 MB，双击安装即可
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 查看全部版本。详细步骤见 [安装与使用](#安装与使用)。
 
@@ -68,6 +68,13 @@
 - **检查更新**：启动后自动检查一次有没有新版本（带 30 分钟缓存），也可以手动点；**三通道自动降级**，万一网络受限也不影响使用
 - **本地存储**：所有数据存在本地 SQLite 文件里，关掉重开不丢，不经过任何服务器
 
+### 五、外观与个性化
+
+- **自定义壁纸**：应用背景不再是单调纯色 —— 可以换**预设壁纸**（项目 `resources/wallpapers/` 下的图片会随安装包一起分发；往目录里丢图后打开面板即出现，**无需改代码、无需重启**），也可以**自选本地图片**（挑了之后会复制一份到应用数据目录，所以原图移动、删除、换机器都不影响）；不想用壁纸时一键「不用壁纸」
+- **卡片半透明 + 背景模糊**：全站面板统一可调透明度（30% ~ 100%），「壁纸好看」与「文字看得清」之间自己找平衡；还可以给壁纸加 0 ~ 24px 模糊
+- **观感优先，但不牺牲可读性**：壁纸只铺在最底层，上面压一层固定遮罩；弹窗的透明度有独立下限，拉到最透也不会被背后的文字干扰
+- **设置只存在本地**：外观偏好写在本地配置文件里，**不写进数据库，也不会混进「导出列表」的分享文件**（别人导入你的列表不会带上你的壁纸）
+
 ---
 
 ## 四个数据分区
@@ -93,7 +100,7 @@
 
 从上到下的布局：
 
-1. **顶栏**：登录信息（头像 + 昵称）、按分区变化的操作按钮（导入收藏夹 / 拉取稍后再看 / 搜索 B 站 / 导入分享文件）、通用的「导出列表」、打开 B 站客户端
+1. **顶栏**：登录信息（头像 + 昵称）、按分区变化的操作按钮（导入收藏夹 / 拉取稍后再看 / 搜索 B 站 / 导入分享文件）、通用的「导出列表」、打开 B 站客户端，以及「**外观**」（换壁纸 / 调卡片透明度与背景模糊）
 2. **分区标签页**：我的收藏 / 稍后再看 / 分享导入 / 搜索导入
 3. **统计条**：大字号的总数、总时长、已看·未看（有失效时多一格红色），右侧「📊 统计面板」可展开 Top 标签 / Top UP 主
 4. **抓取框**：粘贴链接 → 抓取信息 → 保存
@@ -122,6 +129,7 @@
 - **不覆盖原则**：重新导入时只补「标签为空 / 没有来源记录」的字段，**不会覆盖**你整理过的标签与来源信息
 - **`shared` 额外字段**：`share_from`（分享者昵称）、`share_mid`，唯一约束为 `UNIQUE(bvid, share_from)`
 - **自动迁移**：程序启动时用 `PRAGMA table_info` 检查缺哪列就补哪列，老版本数据库可以直接升级，不会丢数据
+- **外观设置**：`%APPDATA%\bilibili-collector\settings.json`（壁纸选择、卡片透明度、背景模糊）；自选的壁纸图片会保存在 `%APPDATA%\bilibili-collector\wallpapers\`。这两项都属于「界面偏好」，**不进数据库、也不参与「导出列表」**，和你的收藏数据完全隔离
 
 > 想备份就直接复制这个 `.db` 文件；也可以用「导出列表」导出一份 `.json` 作为可读备份。
 
@@ -135,7 +143,7 @@
 
 | 平台 | 文件 | 大小 |
 |------|------|------|
-| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.5.1.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.5.1/Bilibili-Collector-Setup-1.5.1.exe) | 约 105 MB |
+| Windows 10 / 11 (x64) | [Bilibili-Collector-Setup-1.6.0.exe](https://github.com/Chadaidai-offical/bilibili-collector/releases/download/v1.6.0/Bilibili-Collector-Setup-1.6.0.exe) | 约 105 MB |
 
 也可以到 [Releases 页面](https://github.com/Chadaidai-offical/bilibili-collector/releases/latest) 下载最新版本（版本号更新时以该页面为准）。
 
@@ -259,7 +267,8 @@ git push origin main
 ### 2. 登录与 Cookie 安全
 
 - 登录产生的 `SESSDATA` 等 Cookie 是**你账号的登录凭证**，请勿把登录态截图发给他人。
-- 本项目把 Cookie 存在 Electron 本地会话里，**不写进代码、不上传服务器**。但仍建议：**不要轻易复制粘贴 Cookie 给第三方**。
+- 登录凭证在本地**已加密保存，不会以明文形式留在磁盘上**；应用不写进代码、不上传任何服务器，且重启后无需重新扫码即可恢复登录态。
+- 加密解决的是「文件被拷走 / 换机器 / 备份同步」这类场景；**已经运行在你电脑上的恶意程序不在防护范围内**。所以仍建议：**不要轻易把 Cookie 复制粘贴给第三方**。
 
 ### 3. 频率控制与风控
 
@@ -317,10 +326,12 @@ bilibili-collector/
 │       ├── index.html
 │       └── src/
 │           ├── main.jsx
-│           ├── App.jsx       # 主界面：分区 / 列表 / 筛选 / 排序 / 统计 / 标签管理 / 搜索 / 下载 / 更新提示
-│           └── index.css     # 样式（B站粉配色）
+│           ├── App.jsx       # 主界面：分区 / 列表 / 筛选 / 排序 / 统计 / 标签管理 / 搜索 / 下载 / 更新提示 / 外观设置
+│           ├── appearance.js # 外观落地：CSS 变量 + 壁纸层（在 React 渲染前同步铺好，避免闪屏）
+│           └── index.css     # 样式（B站粉配色 + 半透明面板变量）
 ├── resources/
-│   └── ffmpeg/               # 内置 ffmpeg.exe（下载时合并音视频流；exe 不入库，打包时自动塞进安装包）
+│   ├── ffmpeg/               # 内置 ffmpeg.exe（下载时合并音视频流；exe 不入库，打包时自动塞进安装包）
+│   └── wallpapers/           # 内置预设壁纸（图片随安装包分发；丢图进来自动出现在「外观」面板）
 ├── electron.vite.config.mjs  # electron-vite 配置
 ├── electron-builder.yml      # 打包配置
 ├── LICENSE
@@ -341,11 +352,26 @@ bilibili-collector/
 | 全站搜索 | `search-bili`（wbi 签名）/ `import-search-items` |
 | 视频下载 | `get-video-qualities` / `pick-save-path` / `download-video`（进度通过 `download-progress` 事件回报）/ `cancel-download` |
 | 更新 | `check-update` / `open-external` |
+| 外观 | `get-appearance` / `get-appearance-sync`（免闪屏的同步读取）/ `set-appearance` / `pick-wallpaper-image` |
 | 其它 | `open-bilibili` |
 
 ---
 
 ## 更新内容（CHANGELOG）
+
+### v1.6.0（2026-10-12）
+
+新增**外观自定义（换壁纸）**，并给登录凭证加上加密保护：
+
+- **自定义壁纸**：背景不再是单调纯色
+  - **预设壁纸**：`resources/wallpapers/` 里的图片会随安装包一起分发（项目结构那一节有目录说明）。往这个目录丢一张图，再打开「外观」面板就会出现在缩略图列表里 —— **无需改代码、无需重启**，支持 png / jpg / webp / bmp / gif / avif
+  - **自选本地图片**：面板里点「选择本地图片」，挑自己电脑上的图即可。应用会**复制一份**到自己的数据目录，所以原图移动、删除、重命名都不影响壁纸；换图时自动清掉上一张，不会越攒越多
+  - 不想用壁纸时点「不用壁纸」即可恢复原本的纯色背景，「恢复默认」一键回到初始外观
+- **卡片半透明 + 背景模糊**：全站 49 处面板底色统一改成半透明变量，一根滑杆（30% ~ 100%）就能平衡「壁纸观感」与「文字可读性」；还可以给壁纸加 0 ~ 24px 模糊，让内容更突出。弹窗的透明度有独立下限 —— 拉到最透也不会被背后的列表文字干扰
+- **壁纸实现上不将就**：壁纸走自定义协议按需流式加载（不转 base64、不额外吃内存，大图也不卡）；壁纸层固定在内容之下并加了一层遮罩，保证任何图片上文字都清晰；首屏在 React 渲染前就同步铺好壁纸，**不会出现先黑底再跳壁纸**的闪屏
+- **不污染你的数据**：外观偏好存在本地配置文件里，**不写进数据库，也不会混进「导出列表」的分享文件**（别人导入你的列表不会带上你的壁纸）
+- **登录凭证加密保护**：登录态改为**加密保存**，磁盘上不再保留明文 Cookie；旧版本的明文凭证会在首次启动时自动完成**无感迁移**（不用重新扫码）。换机器 / 重装系统后需要重新登录一次，收藏数据完全不受影响
+- **启动更稳**：初始化流程改为逐项兜底，任何一项初始化失败都**不会再导致窗口打不开**，最多退化成默认外观 / 未登录
 
 ### v1.5.1（2026-10-11）
 

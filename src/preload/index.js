@@ -72,5 +72,12 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, progress) => cb(progress)
     ipcRenderer.on('download-progress', listener)
     return () => ipcRenderer.removeListener('download-progress', listener)
-  }
+  },
+
+  // 外观设置（壁纸 / 卡片透明度 / 背景模糊）
+  // getAppearanceSync 走同步通道：页面挂载前就要把壁纸铺上，异步会闪一下
+  getAppearance: () => ipcRenderer.invoke('get-appearance'),
+  getAppearanceSync: () => ipcRenderer.sendSync('get-appearance-sync'),
+  setAppearance: (patch) => ipcRenderer.invoke('set-appearance', patch),
+  pickWallpaperImage: () => ipcRenderer.invoke('pick-wallpaper-image')
 })

@@ -1,9 +1,21 @@
-const { app, shell, session, net, BrowserWindow, ipcMain, dialog } = require('electron')
+const {
+  app,
+  shell,
+  session,
+  net,
+  safeStorage,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  protocol
+} = require('electron')
 const { join, basename } = require('path')
+const { pathToFileURL } = require('url')
 const { spawnSync } = require('child_process')
 const crypto = require('crypto')
 const fs = require('fs')
 const Database = require('better-sqlite3')
+
 
 // ===== 从 B 站公开视频页面提取公开元信息 =====
 // 合规说明：只请求公开页面、只提取 og: 元信息、单条触发
@@ -1033,7 +1045,7 @@ async function searchBili(keyword) {
 
   // 必须登录：带登录态的请求风控权重更低，也避免匿名流量被判为脚本
   try {
-    const cookies = await session.defaultSession.cookies.get({ url: 'https://bilibili.com' })
+    const cookies = await getAuthSession().cookies.get({ url: 'https://bilibili.com' })
     if (!cookies.some((c) => c.name === 'SESSDATA')) {
       return { error: '请先登录 B 站后再搜索', needLogin: true }
     }
@@ -1961,11 +1973,12 @@ function streamUrls(stream) {
 }
 
 // 流式下载单个地址到本地文件，边写边回报进度。带 Referer 过防盗链。
+// 走 authSession：部分码率（高清/大会员档）依赖登录态，必须带上内存会话里的 Cookie
 async function downloadStream(urls, dest, onProgress, signal) {
   let lastErr = null
   for (const url of urls) {
     try {
-      const res = await net.fetch(url, {
+      const res = await getAuthSession().fetch(url, {
         headers: { 'User-Agent': BILI_UA, Referer: 'https://www.bilibili.com/' },
         signal
       })
@@ -2181,25 +2194,179 @@ exit 0
 // Electron 里 <img> 加载时默认不带正确 Referer 会被 403 导致封面/头像裂图。
 // 这里拦截渲染进程发往 hdslb.com 的请求，强制补上 Referer。
 function setupImageReferer() {
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: ['*://*.hdslb.com/*'] },
-    (details, callback) => {
-      details.requestHeaders['Referer'] = 'https://www.bilibili.com/'
-      callback({ requestHeaders: details.requestHeaders })
+  const filter = { urls: ['*://*.hdslb.com/*'] }
+  const handler = (details, callback) => {
+    details.requestHeaders['Referer'] = 'https://www.bilibili.com/'
+    callback({ requestHeaders: details.requestHeaders })
+  }
+  session.defaultSession.webRequest.onBeforeSendHeaders(filter, handler)
+  // 登录窗口跑在内存会话里，B 站登录页的图床资源同样需要补 Referer
+  getAuthSession().webRequest.onBeforeSendHeaders(filter, handler)
+}
+
+// ===== 登录态安全存储（Cookie 不落盘明文）=====
+// 背景：正式版 Chrome 会用 Windows DPAPI 加密 Cookie 落盘，但 Electron 默认不启用这套
+// 加密 —— 旧版本把登录 Cookie 存在 defaultSession，磁盘上 Network/Cookies 里
+// SESSDATA / DedeUserID / bili_jct 全是明文，拷走文件等于拿到账号。
+//
+// 现在的做法（三层）：
+//   1) 承载登录态的会话改为 authSession = session.fromPartition('bili-auth')。
+//      不带 `persist:` 前缀的会话是【纯内存会话】，Chromium 不会把它的 Cookie 写进任何文件。
+//   2) 需要「重启免登录」时，把内存会话里的 Cookie 用 safeStorage 加密后写进 auth.dat。
+//      Windows 上 safeStorage 走 DPAPI：密钥绑定当前 Windows 账户（存在用户配置目录里），
+//      所以 auth.dat 拷到别的电脑/别的账户都解不开 —— 偷走也没用。
+//   3) 启动时解密 auth.dat 注入内存会话即恢复登录态；解密失败（换机/重装/强改密码）
+//      一律按「未登录」处理并清掉失效备份，用户重新扫码即可，收藏数据不受任何影响。
+//   4) 旧版本的明文 Cookie 做一次性无感迁移：读出 → 加密备份 → 清空 defaultSession，
+//      用户不用重新登录，磁盘上的明文也一并消失。
+
+// 纯内存会话（进程退出即消失，永不落盘）。session 模块必须在 app ready 之后才能用，
+// 所以这里惰性创建。
+let authSession = null
+function getAuthSession() {
+  if (!authSession) authSession = session.fromPartition('bili-auth')
+  return authSession
+}
+
+// 登录态备份文件（内容是 safeStorage 加密过的密文，不是明文）
+function authFilePath() {
+  return join(app.getPath('userData'), 'auth.dat')
+}
+
+const AUTH_VERSION = 1
+// B 站系 Cookie 的域名特征（登录页会往这些域写 Cookie）
+const AUTH_DOMAIN_RE = /(^|\.)(bilibili\.com|bilibili\.cn|biligame\.com|huasheng\.cn)$/i
+
+// 读取内存会话里的 B 站系 Cookie
+async function readAuthCookies(sess) {
+  const s = sess || getAuthSession()
+  const all = await s.cookies.get({})
+  return all.filter((c) => AUTH_DOMAIN_RE.test(String(c.domain || '')))
+}
+
+function clearAuthSnapshot() {
+  try {
+    fs.rmSync(authFilePath(), { force: true })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
+
+// 把当前登录态加密落盘；未登录则删除备份
+async function saveAuthSnapshot() {
+  try {
+    const cookies = await readAuthCookies()
+    if (!cookies.some((c) => c.name === 'SESSDATA')) {
+      clearAuthSnapshot()
+      return { ok: false, reason: 'not-logged-in' }
     }
-  )
+    if (!safeStorage.isEncryptionAvailable()) {
+      // 极少数环境（如缺少系统密钥环）没有可用加密：不写盘，登录态只在本次运行内有效
+      console.warn('[auth] 系统加密不可用，本次运行的登录态不会被保存')
+      return { ok: false, reason: 'encryption-unavailable' }
+    }
+
+    const payload = JSON.stringify({
+      v: AUTH_VERSION,
+      savedAt: Date.now(),
+      cookies: cookies.map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        secure: !!c.secure,
+        httpOnly: !!c.httpOnly,
+        expirationDate: c.expirationDate,
+        sameSite: c.sameSite
+      }))
+    })
+
+    fs.writeFileSync(authFilePath(), safeStorage.encryptString(payload), { mode: 0o600 })
+    return { ok: true, count: cookies.length }
+  } catch (err) {
+    return { ok: false, reason: err.message }
+  }
+}
+
+// 把 Cookie 写进会话（快照恢复与旧数据迁移共用）
+async function injectCookies(sess, cookies) {
+  let n = 0
+  for (const c of cookies || []) {
+    if (!c || !c.name || !c.domain) continue
+    try {
+      const details = {
+        url: `https://${String(c.domain).replace(/^\./, '')}${c.path || '/'}`,
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || '/',
+        secure: !!c.secure,
+        httpOnly: !!c.httpOnly
+      }
+      if (c.expirationDate) details.expirationDate = c.expirationDate
+      if (c.sameSite) details.sameSite = c.sameSite
+      await sess.cookies.set(details)
+      n++
+    } catch {
+      // 单条写入失败（如域名不合法）直接跳过，不影响其余 Cookie
+    }
+  }
+  return n
+}
+
+// 启动时恢复登录态
+async function restoreAuthSnapshot() {
+  let raw
+  try {
+    raw = fs.readFileSync(authFilePath())
+  } catch {
+    return { ok: false, reason: 'no-snapshot' }
+  }
+  if (!safeStorage.isEncryptionAvailable()) return { ok: false, reason: 'encryption-unavailable' }
+
+  let data
+  try {
+    data = JSON.parse(safeStorage.decryptString(raw))
+  } catch {
+    // 换机器 / 换 Windows 用户 / 重装系统 / 管理员强改密码 → DPAPI 解不开。
+    // 按未登录处理并清掉这份失效备份（下次登录会写入新备份）
+    clearAuthSnapshot()
+    return { ok: false, reason: 'decrypt-failed' }
+  }
+
+  const count = await injectCookies(getAuthSession(), (data && data.cookies) || [])
+  return { ok: count > 0, count }
+}
+
+// 一次性迁移：把旧版本留在 defaultSession（明文 Cookies 文件）里的登录态搬到加密备份，
+// 然后清空 defaultSession 的 Cookie —— 磁盘上的明文随之消失，用户无需重新登录。
+async function migrateLegacyPlaintextCookies() {
+  try {
+    const legacy = (await session.defaultSession.cookies.get({})).filter((c) =>
+      AUTH_DOMAIN_RE.test(String(c.domain || ''))
+    )
+    if (!legacy.length) return { migrated: 0 }
+
+    const count = await injectCookies(getAuthSession(), legacy)
+    await session.defaultSession.clearStorageData({ storages: ['cookies'] })
+    const saved = await saveAuthSnapshot()
+    return { migrated: count, saved: !!saved.ok, wiped: true }
+  } catch (err) {
+    return { migrated: 0, error: err.message }
+  }
 }
 
 // ===== B 站登录 + 收藏夹导入 =====
-// 通过 Electron 的 Chromium 网络栈（net.fetch）发请求，自动携带 defaultSession 里的
-// 登录 Cookie 与真实浏览器环境；只拉取用户自己的收藏夹数据。
+// 所有需要登录态的请求都走 authSession（纯内存会话，Cookie 不落盘）的 Chromium 网络栈，
+// 自动携带该会话里的登录 Cookie 与真实浏览器环境；只拉取用户自己的收藏夹数据。
 
 const BILI_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
 
-// 用 Chromium 网络栈发请求（自动带登录 Cookie，UA 手动伪装成浏览器）
+// 用 Chromium 网络栈发请求（自动带内存会话里的登录 Cookie，UA 手动伪装成浏览器）
 function biliFetch(url) {
-  return net.fetch(url, {
+  return getAuthSession().fetch(url, {
     headers: {
       'User-Agent': BILI_UA,
       Referer: 'https://www.bilibili.com/'
@@ -2210,7 +2377,7 @@ function biliFetch(url) {
 // 检查登录状态：先查 Cookie 判断是否登录，再用 nav 接口拿昵称/头像/mid
 async function checkLogin() {
   try {
-    const cookies = await session.defaultSession.cookies.get({ url: 'https://bilibili.com' })
+    const cookies = await getAuthSession().cookies.get({ url: 'https://bilibili.com' })
     if (!cookies.some((c) => c.name === 'SESSDATA')) {
       return { loggedIn: false }
     }
@@ -2234,7 +2401,7 @@ async function checkLogin() {
   }
 
   try {
-    const cookies = await session.defaultSession.cookies.get({ url: 'https://bilibili.com' })
+    const cookies = await getAuthSession().cookies.get({ url: 'https://bilibili.com' })
     const dede = cookies.find((c) => c.name === 'DedeUserID')
     return { loggedIn: true, uname: '', face: '', mid: dede ? Number(dede.value) : 0 }
   } catch {
@@ -2259,7 +2426,8 @@ function openLogin() {
       title: '登录 B 站',
       autoHideMenuBar: true,
       parent: parent || undefined,
-      webPreferences: { sandbox: false }
+      // 登录窗口跑在纯内存会话里：Cookie 只进内存，不会写进磁盘上的 Cookies 文件
+      webPreferences: { session: getAuthSession(), sandbox: false }
     })
 
     loginWindow.webContents.setWindowOpenHandler((details) => {
@@ -2284,8 +2452,10 @@ function openLogin() {
     // 轮询 Cookie，检测到 SESSDATA 即认为登录成功
     const timer = setInterval(async () => {
       try {
-        const cookies = await session.defaultSession.cookies.get({ url: 'https://bilibili.com' })
+        const cookies = await getAuthSession().cookies.get({ url: 'https://bilibili.com' })
         if (cookies.some((c) => c.name === 'SESSDATA')) {
+          // 登录成功：立刻把内存会话的 Cookie 加密落盘，供下次启动免登录
+          await saveAuthSnapshot()
           finish(await checkLogin())
         }
       } catch {
@@ -2297,13 +2467,14 @@ function openLogin() {
   })
 }
 
-// 退出登录：清除 defaultSession 的 Cookie
+// 退出登录：清空内存会话的 Cookie，并删除加密备份
 async function logout() {
   try {
-    await session.defaultSession.clearStorageData({ storages: ['cookies'] })
+    await getAuthSession().clearStorageData({ storages: ['cookies'] })
   } catch {
     // 忽略清理失败
   }
+  clearAuthSnapshot()
   return { ok: true }
 }
 
@@ -2507,6 +2678,257 @@ async function importWatchLater(onTagsProgress) {
   return { ok: true, added, skipped, total, tagsFilled, tagsBlocked }
 }
 
+// ===== 外观设置（壁纸 + 卡片透明度）=====
+// 设计要点：
+//   1) 壁纸走自定义协议：wallpaper://preset/<文件名> 与 wallpaper://user/<文件名>，
+//      由主进程把本地图片以文件流回给渲染层。相比「读成 base64 塞进 IPC」，内存占用低一个量级；
+//      也比让页面直接引 file:// 更稳 —— 开发环境（http://localhost）与打包后（file://）行为一致。
+//   2) 预设壁纸放在 resources/wallpapers（打包后在 resources/wallpapers），
+//      每次读取都重新扫描目录 —— 用户往里丢一张图片，不用改代码、不用重启就能出现在列表里。
+//   3) 用户自选的图片会被**拷贝**到 userData/wallpapers/ —— 原图被移动或删除后壁纸依然有效。
+//   4) 设置存 userData/settings.json：不写进 videos.db，也不参与「导出列表」分享文件
+//      （别人的收藏列表不该带上你的壁纸偏好）。
+
+const WALLPAPER_DIR = 'wallpapers'
+const WALLPAPER_EXT_RE = /\.(png|jpe?g|webp|bmp|gif|avif)$/i
+const CARD_OPACITY_MIN = 0.3
+const CARD_OPACITY_MAX = 1
+const WALLPAPER_BLUR_MAX = 24
+const DEFAULT_APPEARANCE = {
+  wallpaper: { type: 'preset', file: '' }, // 'preset' 预设 | 'user' 自选 | 'none' 不用壁纸
+  cardOpacity: 0.72,
+  wallpaperBlur: 0
+}
+
+// 必须在 app ready 之前注册；standard+secure 才能让 <img>/background-image 正常解析
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'wallpaper',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+  }
+])
+
+function presetWallpaperDir() {
+  // 打包后是 resources/wallpapers（由 electron-builder 的 extraResources 带进去）；
+  // 开发时是工程的 resources/wallpapers。两个都试一遍，
+  // 万一将来打包配置漏了这条资源，也不会表现为「装完预设是空的」。
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, WALLPAPER_DIR), join(__dirname, '../../resources', WALLPAPER_DIR)]
+    : [join(__dirname, '../../resources', WALLPAPER_DIR)]
+
+  for (const dir of candidates) {
+    try {
+      if (fs.statSync(dir).isDirectory()) return dir
+    } catch {
+      // 试下一个
+    }
+  }
+  return candidates[candidates.length - 1]
+}
+
+function userWallpaperDir() {
+  const dir = join(app.getPath('userData'), WALLPAPER_DIR)
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch {
+    // 目录建不出来时后续操作会各自报错，这里不阻断启动
+  }
+  return dir
+}
+
+function appearanceFilePath() {
+  return join(app.getPath('userData'), 'settings.json')
+}
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+function readAppearance() {
+  let raw = {}
+  try {
+    raw = JSON.parse(fs.readFileSync(appearanceFilePath(), 'utf8')) || {}
+  } catch {
+    raw = {}
+  }
+  const w = raw.wallpaper || {}
+  return {
+    wallpaper: {
+      type: ['preset', 'user', 'none'].includes(w.type) ? w.type : DEFAULT_APPEARANCE.wallpaper.type,
+      file: typeof w.file === 'string' ? w.file : ''
+    },
+    cardOpacity: clampNumber(
+      raw.cardOpacity,
+      CARD_OPACITY_MIN,
+      CARD_OPACITY_MAX,
+      DEFAULT_APPEARANCE.cardOpacity
+    ),
+    wallpaperBlur: clampNumber(raw.wallpaperBlur, 0, WALLPAPER_BLUR_MAX, DEFAULT_APPEARANCE.wallpaperBlur)
+  }
+}
+
+function writeAppearance(patch) {
+  const cur = readAppearance()
+  const p = patch || {}
+  const next = {
+    wallpaper: { ...cur.wallpaper, ...(p.wallpaper || {}) },
+    cardOpacity:
+      p.cardOpacity === undefined
+        ? cur.cardOpacity
+        : clampNumber(p.cardOpacity, CARD_OPACITY_MIN, CARD_OPACITY_MAX, cur.cardOpacity),
+    wallpaperBlur:
+      p.wallpaperBlur === undefined
+        ? cur.wallpaperBlur
+        : clampNumber(p.wallpaperBlur, 0, WALLPAPER_BLUR_MAX, cur.wallpaperBlur)
+  }
+  fs.writeFileSync(appearanceFilePath(), JSON.stringify(next, null, 2))
+  return next
+}
+
+function wallpaperURL(kind, file) {
+  return `wallpaper://${kind}/${encodeURIComponent(file)}`
+}
+
+// 扫描预设目录：文件名即显示名，按名称排序
+function listPresetWallpapers() {
+  let files = []
+  try {
+    files = fs.readdirSync(presetWallpaperDir()).filter((f) => WALLPAPER_EXT_RE.test(f))
+  } catch {
+    files = []
+  }
+  files.sort((a, b) => a.localeCompare(b, 'zh'))
+  return files.map((f) => ({
+    file: f,
+    name: basename(f).replace(/\.[^.]+$/, ''),
+    url: wallpaperURL('preset', f)
+  }))
+}
+
+// 汇总一份「渲染层需要的全部外观信息」
+function appearanceState() {
+  const settings = readAppearance()
+  const presets = listPresetWallpapers()
+  let resolved = null
+
+  if (settings.wallpaper.type === 'user' && settings.wallpaper.file) {
+    if (fs.existsSync(join(userWallpaperDir(), settings.wallpaper.file))) {
+      resolved = {
+        type: 'user',
+        file: settings.wallpaper.file,
+        url: wallpaperURL('user', settings.wallpaper.file)
+      }
+    }
+  } else if (settings.wallpaper.type === 'preset' && presets.length) {
+    // 没指定具体文件（或指定的文件已被删除）就退回第一张
+    const hit = presets.find((p) => p.file === settings.wallpaper.file) || presets[0]
+    resolved = { type: 'preset', file: hit.file, url: hit.url }
+  }
+
+  return {
+    settings,
+    presets,
+    resolved,
+    // 给设置面板显示用：告诉用户「预设图该放哪儿」
+    paths: { preset: presetWallpaperDir() },
+    limits: {
+      cardOpacity: [CARD_OPACITY_MIN, CARD_OPACITY_MAX],
+      wallpaperBlur: [0, WALLPAPER_BLUR_MAX]
+    }
+  }
+}
+
+// 启动时先算一份，供渲染层同步取用（避免 React 挂载前白屏/无壁纸闪一下）
+let bootAppearance = null
+
+function setupWallpaperProtocol() {
+  protocol.handle('wallpaper', async (request) => {
+    try {
+      const u = new URL(request.url)
+      const kind = u.hostname === 'user' ? 'user' : u.hostname === 'preset' ? 'preset' : ''
+      if (!kind) return new Response('bad scope', { status: 400 })
+
+      const name = decodeURIComponent(u.pathname.replace(/^\/+/, ''))
+      // 只接受「纯文件名」：挡掉 ../ 与子目录，防止越目录读取
+      if (!name || name !== basename(name) || /[\\/]/.test(name)) {
+        return new Response('bad name', { status: 400 })
+      }
+      if (!WALLPAPER_EXT_RE.test(name)) return new Response('bad type', { status: 415 })
+
+      const base = kind === 'user' ? userWallpaperDir() : presetWallpaperDir()
+      const full = join(base, name)
+      if (!fs.existsSync(full)) return new Response('not found', { status: 404 })
+
+      return net.fetch(pathToFileURL(full).toString())
+    } catch (err) {
+      return new Response(String((err && err.message) || err), { status: 500 })
+    }
+  })
+}
+
+// ===== 外观相关 IPC =====
+ipcMain.handle('get-appearance', () => appearanceState())
+
+// 同步版本：渲染层在 React 挂载前就要拿到壁纸地址，异步会闪一下
+ipcMain.on('get-appearance-sync', (event) => {
+  event.returnValue = bootAppearance || appearanceState()
+})
+
+ipcMain.handle('set-appearance', (_event, patch) => {
+  try {
+    writeAppearance(patch)
+  } catch (err) {
+    return { error: `保存外观设置失败：${err.message}` }
+  }
+  return appearanceState()
+})
+
+// 选一张本地图片当壁纸：拷贝到 userData/wallpapers 后写入设置，并清掉上一张自选图
+ipcMain.handle('pick-wallpaper-image', async () => {
+  const parent = BrowserWindow.getAllWindows()[0]
+  const { canceled, filePaths } = await dialog.showOpenDialog(parent || undefined, {
+    title: '选择壁纸图片',
+    properties: ['openFile'],
+    filters: [
+      { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'avif'] }
+    ]
+  })
+  if (canceled || !filePaths || !filePaths[0]) return { canceled: true }
+
+  const src = filePaths[0]
+  let size = 0
+  try {
+    size = fs.statSync(src).size
+  } catch (err) {
+    return { error: `读不到这个文件：${err.message}` }
+  }
+  if (size > 30 * 1024 * 1024) return { error: '图片超过 30MB，建议先压缩再选（否则加载会卡）' }
+
+  const extMatch = src.match(WALLPAPER_EXT_RE)
+  const ext = extMatch ? extMatch[0].toLowerCase() : '.png'
+  const dir = userWallpaperDir()
+  const file = `user-${Date.now()}${ext}`
+
+  try {
+    fs.copyFileSync(src, join(dir, file))
+    const prev = readAppearance().wallpaper
+    if (prev.type === 'user' && prev.file && prev.file !== file) {
+      try {
+        fs.rmSync(join(dir, prev.file), { force: true })
+      } catch {
+        // 旧图删不掉不影响使用，跳过
+      }
+    }
+  } catch (err) {
+    return { error: `复制图片失败：${err.message}` }
+  }
+
+  writeAppearance({ wallpaper: { type: 'user', file } })
+  return appearanceState()
+})
+
 // ===== 创建窗口 =====
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -2517,6 +2939,8 @@ function createWindow() {
     title: 'B站收藏管理',
     show: false,
     autoHideMenuBar: true,
+    // 与页面底色一致，避免壁纸加载前闪一下白
+    backgroundColor: '#1a1a1a',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -2718,14 +3142,50 @@ ipcMain.handle('import-share-data', (_event, payload) => {
   }
 })
 
-app.whenReady().then(() => {
-  initDb()
-  setupImageReferer()
+app.whenReady().then(async () => {
+  // 初始化的每一步都兜住异常：任何一项失败都不该让「窗口打不开」，
+  // 大不了退化成默认外观 / 未登录，再让用户重试。
+  try {
+    initDb()
+  } catch (err) {
+    console.error('[startup] 数据库初始化失败：', (err && err.stack) || err)
+  }
+  try {
+    setupImageReferer()
+    setupWallpaperProtocol()
+    // 先读一次外观设置：渲染层要同步拿壁纸地址，也顺便把窗口底色定下来，减少启动闪白
+    bootAppearance = appearanceState()
+  } catch (err) {
+    bootAppearance = null
+    console.error('[startup] 外观初始化失败：', (err && err.stack) || err)
+  }
+
+  // 登录态初始化：①先把旧版本留在 defaultSession 里的明文 Cookie 迁到加密备份并清空明文；
+  // ②没有可迁移的数据时，从 auth.dat 解密恢复到内存会话。
+  try {
+    const legacy = await migrateLegacyPlaintextCookies()
+    if (!legacy.migrated) await restoreAuthSnapshot()
+  } catch {
+    // 登录态初始化失败不影响应用启动，按未登录处理
+  }
+
   createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// 退出前刷新加密备份：B 站会轮换部分 Cookie（buvid / ticket 之类），把最新值存下来。
+// cookies.get 是异步的，所以这里拦一次退出、存完再真正退出（用标记避免二次拦截）。
+let authQuitHandled = false
+app.on('before-quit', (event) => {
+  if (authQuitHandled) return
+  authQuitHandled = true
+  event.preventDefault()
+  Promise.race([saveAuthSnapshot(), new Promise((resolve) => setTimeout(resolve, 2000))])
+    .catch(() => {})
+    .finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {
@@ -2756,5 +3216,18 @@ module.exports = {
   computeTagMetaInfo,
   tagOverview,
   tagFieldsOf,
-  needsTagFetch
+  needsTagFetch,
+  // 登录态加密存储（供测试断言）
+  getAuthSession,
+  authFilePath,
+  readAuthCookies,
+  saveAuthSnapshot,
+  restoreAuthSnapshot,
+  clearAuthSnapshot,
+  migrateLegacyPlaintextCookies,
+  readAppearance,
+  writeAppearance,
+  appearanceState,
+  listPresetWallpapers,
+  wallpaperURL
 }
