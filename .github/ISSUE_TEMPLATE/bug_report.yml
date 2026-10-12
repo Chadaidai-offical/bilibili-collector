@@ -1,0 +1,92 @@
+name: 缺陷报告
+description: 报告一个可以复现的问题（程序报错、界面异常、功能不工作等）
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你帮忙改进这个项目。请尽量把下面的信息填完整，这样定位问题会快很多。
+
+        如果是「不知道怎么用」这类疑问，建议先看 [README](https://github.com/Chadaidai-offical/bilibili-collector/blob/main/README.md)，里面的「注意事项」一节覆盖了大部分常见情况。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 安装包文件名里就有，例如「B站收藏管理 Setup 1.6.0.exe」对应 1.6.0
+      placeholder: 1.6.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - 其它（请在下方说明）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出问题的功能
+      description: 选一个最接近的即可
+      options:
+        - 粘贴链接抓取
+        - 登录 / 导入收藏夹
+        - 拉取稍后再看
+        - 搜索 B 站全站
+        - 导入 / 导出分享文件
+        - 标签管理
+        - 失效检测
+        - 视频下载
+        - 外观 / 壁纸
+        - 检查更新
+        - 启动 / 界面显示
+        - 其它
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+      description: 实际发生了什么？你原本期望的结果是什么？
+      placeholder: 点击「导入收藏夹」后进度条停在 30% 不动，等了五分钟也没变化。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按顺序写清楚怎么操作能重现这个问题
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 截图或报错信息
+      description: 可以直接把截图拖进来；如果有终端输出、错误提示文字，也一并贴上
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已经搜索过现有 issue，确认没有重复
+          required: true
+        - label: 我使用的已经是最新版本
+          required: false

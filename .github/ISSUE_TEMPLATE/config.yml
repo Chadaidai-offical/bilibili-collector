@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用说明与常见问题
+    url: https://github.com/Chadaidai-offical/bilibili-collector/blob/main/README.md
+    about: 安装、卸载、数据备份、下载失败、检查更新报 403 等常见情况，README 里都有说明
+  - name: 下载最新版本
+    url: https://github.com/Chadaidai-offical/bilibili-collector/releases/latest
+    about: 安装包统一放在 Releases 页面
